@@ -52,7 +52,10 @@ GOOGLE_SHEET_ID=your_google_sheet_id_here
 GOOGLE_SHEET_NAME=Sheet1
 GOOGLE_SHEET_URL=https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
 CREDENTIALS_PATH=credentials.json
+ADMIN_USER_IDS=123456789,987654321
 ```
+
+   **ADMIN_USER_IDS** - список ID пользователей Telegram, которые могут использовать команду `/restart` для перезапуска бота. ID разделяются запятыми. Чтобы узнать свой ID, напишите боту [@userinfobot](https://t.me/userinfobot).
 
    Для получения токена бота:
    - Найдите [@BotFather](https://t.me/BotFather) в Telegram
@@ -91,6 +94,8 @@ python bot.py
 - `/help` - Показать справку
 - `/report` - Получить ссылку на таблицу
 - `/plan` - Ввести запланированные расходы/доходы
+- `/test` - Быстрый ввод данных одной строкой (сумма категория [описание])
+- `/restart` - Перезапустить бота (только для администраторов)
 - `/cancel` - Отменить текущую операцию
 
 ## Структура проекта

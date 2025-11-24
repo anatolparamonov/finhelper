@@ -92,6 +92,15 @@ def get_skip_description_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 
+def get_test_continue_keyboard():
+    """Клавиатура после ввода данных через /test"""
+    keyboard = [
+        [InlineKeyboardButton("Продолжить ввод", callback_data="test_continue")],
+        [InlineKeyboardButton("В начало", callback_data="test_start")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
@@ -200,25 +209,6 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_FOR_TEST_TYPE
 
 
-async def test_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик выбора типа для /test"""
-    query = update.callback_query
-    await query.answer()
-    
-    fact_type = "расход" if query.data == "expense" else "доход"
-    context.user_data['fact_type'] = fact_type
-    
-    await query.edit_message_text(
-        f"Вы выбрали: <b>{fact_type}</b>\n\n"
-        "Введите данные через пробел:\n"
-        "<b>сумма категория [описание]</b>\n\n"
-        "Пример: <code>1000 продукты магазин</code>\n"
-        "или: <code>50000 зарплата</code>",
-        parse_mode='HTML'
-    )
-    return WAITING_FOR_TEST_INPUT
-
-
 async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ввода данных для /test"""
     try:
@@ -286,21 +276,25 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if success:
             await update.message.reply_text(
-                f"✅ Данные успешно записаны!\n\n"
+                f"✅ Данные успешно записаны в таблицу!\n\n"
                 f"Тип: <b>{context.user_data['fact_type']}</b>\n"
                 f"Сумма: <b>{format_number(amount)} руб.</b>\n"
                 f"Категория: <b>{category}</b>\n"
-                f"{'Описание: ' + description if description else ''}",
-                parse_mode='HTML'
+                f"{'Описание: ' + description if description else ''}\n\n"
+                "Выберите следующее действие:",
+                parse_mode='HTML',
+                reply_markup=get_test_continue_keyboard()
             )
+            # Сохраняем test_mode для продолжения
+            test_mode = context.user_data.get('test_mode', False)
+            context.user_data.clear()
+            context.user_data['test_mode'] = test_mode
+            return WAITING_FOR_TEST_TYPE
         else:
             await update.message.reply_text(
                 "❌ Ошибка при записи данных. Попробуйте еще раз."
             )
-        
-        # Очищаем данные
-        context.user_data.clear()
-        return ConversationHandler.END
+            return WAITING_FOR_TEST_INPUT
         
     except Exception as e:
         logger.error(f"Ошибка в test_input_handler: {e}")
@@ -335,12 +329,26 @@ async def expense_income_callback(update: Update, context: ContextTypes.DEFAULT_
     fact_type = "расход" if query.data == "expense" else "доход"
     context.user_data['fact_type'] = fact_type
     
-    await query.edit_message_text(
-        f"Вы выбрали: <b>{fact_type}</b>\n\n"
-        "Введите сумму в целых рублях (например: 10000 или 10 000):",
-        parse_mode='HTML'
-    )
-    return WAITING_FOR_AMOUNT
+    # Проверяем, находимся ли мы в режиме /test
+    if context.user_data.get('test_mode', False):
+        # Режим быстрого ввода /test
+        await query.edit_message_text(
+            f"Вы выбрали: <b>{fact_type}</b>\n\n"
+            "Введите данные через пробел:\n"
+            "<b>сумма категория [описание]</b>\n\n"
+            "Пример: <code>1000 продукты магазин</code>\n"
+            "или: <code>50000 зарплата</code>",
+            parse_mode='HTML'
+        )
+        return WAITING_FOR_TEST_INPUT
+    else:
+        # Обычный режим
+        await query.edit_message_text(
+            f"Вы выбрали: <b>{fact_type}</b>\n\n"
+            "Введите сумму в целых рублях (например: 10000 или 10 000):",
+            parse_mode='HTML'
+        )
+        return WAITING_FOR_AMOUNT
 
 
 async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -589,11 +597,15 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /restart - перезапуск бота"""
     # Получаем список администраторов из .env
     admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
-    admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()] if admin_ids_str else []
+    try:
+        admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()] if admin_ids_str else []
+    except ValueError:
+        admin_ids = []
     
     user_id = update.effective_user.id
     
-    # Проверяем права доступа
+    # Если список администраторов пуст, разрешаем всем (для разработки)
+    # В продакшене лучше всегда указывать ADMIN_USER_IDS
     if admin_ids and user_id not in admin_ids:
         await update.message.reply_text(
             "❌ У вас нет прав для выполнения этой команды."
@@ -608,11 +620,11 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Останавливаем бота
     global application_instance
     if application_instance:
-        logger.info(f"Перезапуск бота по запросу пользователя {user_id}")
+        logger.info(f"Перезапуск бота по запросу пользователя {user_id} ({update.effective_user.username})")
         # Останавливаем polling
-        await application_instance.stop()
-        # Завершаем процесс - внешний процесс (systemd/supervisor) перезапустит бота
+        # Внешний процесс (systemd/supervisor/docker) должен перезапустить бота
         import sys
+        # Завершаем процесс - внешний процесс перезапустит бота
         sys.exit(0)
     else:
         await update.message.reply_text(
@@ -685,17 +697,51 @@ def main():
         ]
     )
     
+    # Обработчики для кнопок после ввода данных через /test
+    async def test_continue_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик кнопки 'Продолжить ввод' после /test"""
+        query = update.callback_query
+        await query.answer()
+        
+        context.user_data['test_mode'] = True
+        await query.edit_message_text(
+            "Продолжаем быстрый ввод данных.\n"
+            "Выберите тип операции:",
+            reply_markup=get_main_keyboard()
+        )
+        return WAITING_FOR_TEST_TYPE
+    
+    async def test_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик кнопки 'В начало' после /test"""
+        query = update.callback_query
+        await query.answer()
+        
+        context.user_data.clear()
+        keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "Возвращаемся в начало.\n\n"
+            "Нажмите кнопку СТАРТ для начала работы.",
+            reply_markup=reply_markup
+        )
+        return ConversationHandler.END
+    
     # Создаем ConversationHandler для команды /test
+    # Используем test_type_callback как альтернативный обработчик, но основной обработчик expense_income_callback
+    # будет проверять test_mode и переключаться в правильное состояние
     test_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("test", test_command)
         ],
         states={
             WAITING_FOR_TEST_TYPE: [
-                CallbackQueryHandler(test_type_callback, pattern="^(expense|income)$")
+                CallbackQueryHandler(expense_income_callback, pattern="^(expense|income)$"),
+                CallbackQueryHandler(test_continue_callback, pattern="^test_continue$")
             ],
             WAITING_FOR_TEST_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, test_input_handler)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, test_input_handler),
+                CallbackQueryHandler(test_start_callback, pattern="^test_start$")
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)]
