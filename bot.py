@@ -698,40 +698,55 @@ application_instance = None
 
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /restart - перезапуск бота"""
+    user_id = update.effective_user.id
+    username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
+    logger.info(f"Команда /restart от пользователя {user_id} ({username})")
+    
     # Получаем список администраторов из .env
     admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
+    logger.info(f"ADMIN_USER_IDS из .env: '{admin_ids_str}'")
+    
     try:
         admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()] if admin_ids_str else []
-    except ValueError:
+        logger.info(f"Распарсенные admin_ids: {admin_ids}")
+    except ValueError as e:
+        logger.error(f"Ошибка парсинга ADMIN_USER_IDS: {e}")
         admin_ids = []
-    
-    user_id = update.effective_user.id
     
     # Если список администраторов пуст, разрешаем всем (для разработки)
     # В продакшене лучше всегда указывать ADMIN_USER_IDS
     if admin_ids and user_id not in admin_ids:
+        logger.warning(f"Пользователь {user_id} ({username}) попытался использовать /restart, но не в списке администраторов")
         await update.message.reply_text(
             "❌ У вас нет прав для выполнения этой команды."
         )
         return
     
-    await update.message.reply_text(
-        "🔄 Перезапуск бота...\n"
-        "Пожалуйста, подождите несколько секунд."
-    )
+    logger.info(f"Пользователь {user_id} ({username}) имеет права на перезапуск")
+    
+    try:
+        await update.message.reply_text(
+            "🔄 Перезапуск бота...\n"
+            "Пожалуйста, подождите несколько секунд."
+        )
+        logger.info(f"Сообщение о перезапуске отправлено пользователю {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке сообщения о перезапуске: {e}")
     
     # Останавливаем бота
     global application_instance
     if application_instance:
-        logger.info(f"Перезапуск бота по запросу пользователя {user_id} ({update.effective_user.username})")
-        # Останавливаем polling
+        logger.info(f"Перезапуск бота по запросу пользователя {user_id} ({username})")
+        # Останавливаем polling и завершаем процесс
         # Внешний процесс (systemd/supervisor/docker) должен перезапустить бота
         import sys
-        # Завершаем процесс - внешний процесс перезапустит бота
-        sys.exit(0)
+        import os as os_module
+        logger.info("Завершение процесса для перезапуска...")
+        os_module._exit(0)  # Принудительное завершение процесса
     else:
+        logger.error("application_instance не инициализирован")
         await update.message.reply_text(
-            "❌ Ошибка: не удалось перезапустить бота."
+            "❌ Ошибка: не удалось перезапустить бота. application_instance не инициализирован."
         )
 
 
@@ -796,7 +811,8 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel_conversation),
-            CommandHandler("plan", plan_command)  # Команда /plan работает в любом состоянии
+            CommandHandler("plan", plan_command),  # Команда /plan работает в любом состоянии
+            CommandHandler("restart", restart_command)  # Команда /restart работает в любом состоянии
         ]
     )
     
@@ -848,16 +864,20 @@ def main():
                 CallbackQueryHandler(test_start_callback, pattern="^test_start$")
             ]
         },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)]
+        fallbacks=[
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("restart", restart_command)  # Команда /restart работает в любом состоянии
+        ]
     )
     
     # Регистрируем обработчики
-    # Команды /start, /help, /report, /plan должны работать вне ConversationHandler
+    # Команды /start, /help, /report, /plan, /restart должны работать вне ConversationHandler
     # /plan также в fallbacks ConversationHandler для работы во время разговора
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("plan", plan_command))
+    application.add_handler(CommandHandler("restart", restart_command))
     # ConversationHandler для основного потока ввода данных
     application.add_handler(conv_handler)
     # ConversationHandler для команды /test
