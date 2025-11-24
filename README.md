@@ -69,6 +69,8 @@ ADMIN_USER_IDS=123456789,987654321
 
 ## Запуск
 
+### Локальный запуск
+
 ```bash
 python main.py
 ```
@@ -78,6 +80,17 @@ python main.py
 ```bash
 python bot.py
 ```
+
+### Запуск на сервере
+
+Для автоматического перезапуска при использовании команды `/restart` настройте процесс-менеджер:
+
+- **Systemd** - см. `DEPLOYMENT.md`
+- **Supervisor** - см. `DEPLOYMENT.md`
+- **Docker** - см. `DEPLOYMENT.md`
+- **PM2** - см. `DEPLOYMENT.md`
+
+Подробные инструкции по развертыванию на сервере находятся в файле `DEPLOYMENT.md`.
 
 ## Использование
 
