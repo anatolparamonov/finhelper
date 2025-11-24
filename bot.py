@@ -208,12 +208,17 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"test_mode установлен для пользователя {user_id}")
     
     await update.message.reply_text(
-        "Быстрый ввод данных.\n"
-        "Выберите тип операции:",
-        reply_markup=get_main_keyboard()
+        "Быстрый ввод данных.\n\n"
+        "Введите данные через пробел:\n"
+        "<b>+/- сумма категория [описание]</b>\n\n"
+        "Примеры:\n"
+        "<code>+ 1000 продукты магазин</code> - доход\n"
+        "<code>- 5000 транспорт</code> - расход\n"
+        "<code>+ 50000 зарплата</code> - доход",
+        parse_mode='HTML'
     )
-    logger.info(f"Сообщение отправлено пользователю {user_id}, возвращаем WAITING_FOR_TEST_TYPE")
-    return WAITING_FOR_TEST_TYPE
+    logger.info(f"Сообщение отправлено пользователю {user_id}, возвращаем WAITING_FOR_TEST_INPUT")
+    return WAITING_FOR_TEST_INPUT
 
 
 async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -238,18 +243,37 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parts = text.split()
         logger.info(f"Разделено на части: {parts}")
         
-        if len(parts) < 2:
+        if len(parts) < 3:
             await update.message.reply_text(
-                "Неверный формат. Введите: <b>сумма категория [описание]</b>\n"
-                "Пример: <code>1000 продукты магазин</code>",
+                "Неверный формат. Введите: <b>+/- сумма категория [описание]</b>\n\n"
+                "Примеры:\n"
+                "<code>+ 1000 продукты магазин</code> - доход\n"
+                "<code>- 5000 транспорт</code> - расход",
                 parse_mode='HTML'
             )
             return WAITING_FOR_TEST_INPUT
         
-        # Парсим сумму (первое слово)
+        # Парсим тип операции (первый символ: + или -)
+        type_symbol = parts[0]
+        if type_symbol == "+":
+            fact_type = "доход"
+        elif type_symbol == "-":
+            fact_type = "расход"
+        else:
+            await update.message.reply_text(
+                "Неверный формат. Первый символ должен быть <b>+</b> (доход) или <b>-</b> (расход).\n\n"
+                "Пример: <code>+ 1000 продукты</code> или <code>- 5000 транспорт</code>",
+                parse_mode='HTML'
+            )
+            return WAITING_FOR_TEST_INPUT
+        
+        logger.info(f"Определен тип операции: {fact_type} (символ: {type_symbol})")
+        context.user_data['fact_type'] = fact_type
+        
+        # Парсим сумму (второе слово)
         try:
-            logger.info(f"Парсинг суммы из '{parts[0]}'")
-            amount = parse_number(parts[0])
+            logger.info(f"Парсинг суммы из '{parts[1]}'")
+            amount = parse_number(parts[1])
             logger.info(f"Распарсенная сумма: {amount}")
             if amount <= 0:
                 raise ValueError("Сумма должна быть положительной")
@@ -257,16 +281,15 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             logger.error(f"Ошибка парсинга суммы для пользователя {user_id}: {e}")
             await update.message.reply_text(
                 "Неверный формат суммы. Введите число в целых рублях.\n"
-                "Пример: <code>1000</code> или <code>10 000</code>",
+                "Пример: <code>+ 1000</code> или <code>- 10 000</code>",
                 parse_mode='HTML'
             )
             return WAITING_FOR_TEST_INPUT
         
-        # Ищем категорию по второму слову
+        # Ищем категорию по третьему слову
         try:
-            category_word = parts[1]
+            category_word = parts[2]
             logger.info(f"Поиск категории по слову '{category_word}'")
-            fact_type = context.user_data.get('fact_type', 'расход')
             category_type = "Расходы" if fact_type == "расход" else "Доходы"
             logger.info(f"Тип операции: {fact_type}, тип категории: {category_type}")
             categories = sheets_manager.get_categories(category_type)
@@ -299,8 +322,8 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return WAITING_FOR_TEST_INPUT
         
-        # Описание - все остальные слова (если есть)
-        description = " ".join(parts[2:]) if len(parts) > 2 else ""
+        # Описание - все остальные слова (если есть, начиная с 4-го)
+        description = " ".join(parts[3:]) if len(parts) > 3 else ""
         
         # Сохраняем данные
         context.user_data['amount'] = amount
@@ -784,11 +807,15 @@ def main():
         
         context.user_data['test_mode'] = True
         await query.edit_message_text(
-            "Продолжаем быстрый ввод данных.\n"
-            "Выберите тип операции:",
-            reply_markup=get_main_keyboard()
+            "Продолжаем быстрый ввод данных.\n\n"
+            "Введите данные через пробел:\n"
+            "<b>+/- сумма категория [описание]</b>\n\n"
+            "Примеры:\n"
+            "<code>+ 1000 продукты магазин</code> - доход\n"
+            "<code>- 5000 транспорт</code> - расход",
+            parse_mode='HTML'
         )
-        return WAITING_FOR_TEST_TYPE
+        return WAITING_FOR_TEST_INPUT
     
     async def test_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик кнопки 'В начало' после /test"""
