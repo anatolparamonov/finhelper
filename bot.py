@@ -32,6 +32,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 
 # Состояния для ConversationHandler
 WAITING_FOR_AMOUNT, WAITING_FOR_CATEGORY, WAITING_FOR_DESCRIPTION, CONFIRMING = range(4)
+# Состояния для команды /test
+WAITING_FOR_TEST_TYPE, WAITING_FOR_TEST_INPUT = range(4, 6)
 
 # Глобальные переменные
 sheets_manager: GoogleSheetsManager = None
@@ -109,14 +111,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - Начать работу с ботом\n"
         "/report - Получить ссылку на таблицу\n"
         "/plan - Ввести запланированные расходы/доходы\n"
+        "/test - Быстрый ввод данных одной строкой\n"
+        "/restart - Перезапустить бота (только для администраторов)\n"
         "/help - Показать эту справку\n\n"
-        "<b>Как использовать:</b>\n"
+        "<b>Обычный ввод:</b>\n"
         "1. Нажмите СТАРТ\n"
         "2. Выберите Расходы или Доходы\n"
         "3. Введите сумму в целых рублях\n"
         "4. Выберите категорию\n"
         "5. Введите описание (или нажмите Enter для пропуска)\n"
-        "6. Подтвердите или отмените запись"
+        "6. Подтвердите или отмените запись\n\n"
+        "<b>Быстрый ввод (/test):</b>\n"
+        "1. Выберите Расходы или Доходы\n"
+        "2. Введите: <code>сумма категория [описание]</code>\n"
+        "Пример: <code>1000 продукты магазин</code>\n"
+        "или: <code>50000 зарплата</code>"
     )
     await update.message.reply_text(help_text, parse_mode='HTML')
 
@@ -151,7 +160,156 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
     return WAITING_FOR_AMOUNT
-    return WAITING_FOR_AMOUNT
+
+
+def find_closest_category(search_word: str, categories: list) -> str:
+    """
+    Находит наиболее близкую категорию по второму слову
+    Использует проверку вхождения подстроки (без учета регистра)
+    """
+    if not search_word or not categories:
+        return None
+    
+    search_word_lower = search_word.lower()
+    
+    # Сначала ищем точное совпадение (без учета регистра)
+    for category in categories:
+        if search_word_lower == category.lower():
+            return category
+    
+    # Затем ищем вхождение подстроки
+    for category in categories:
+        if search_word_lower in category.lower() or category.lower() in search_word_lower:
+            return category
+    
+    # Если ничего не найдено, возвращаем первую категорию
+    return categories[0] if categories else None
+
+
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /test - быстрый ввод данных"""
+    context.user_data.clear()
+    context.user_data['is_plan'] = False
+    context.user_data['test_mode'] = True
+    
+    await update.message.reply_text(
+        "Быстрый ввод данных.\n"
+        "Выберите тип операции:",
+        reply_markup=get_main_keyboard()
+    )
+    return WAITING_FOR_TEST_TYPE
+
+
+async def test_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик выбора типа для /test"""
+    query = update.callback_query
+    await query.answer()
+    
+    fact_type = "расход" if query.data == "expense" else "доход"
+    context.user_data['fact_type'] = fact_type
+    
+    await query.edit_message_text(
+        f"Вы выбрали: <b>{fact_type}</b>\n\n"
+        "Введите данные через пробел:\n"
+        "<b>сумма категория [описание]</b>\n\n"
+        "Пример: <code>1000 продукты магазин</code>\n"
+        "или: <code>50000 зарплата</code>",
+        parse_mode='HTML'
+    )
+    return WAITING_FOR_TEST_INPUT
+
+
+async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ввода данных для /test"""
+    try:
+        text = update.message.text.strip()
+        parts = text.split()
+        
+        if len(parts) < 2:
+            await update.message.reply_text(
+                "Неверный формат. Введите: <b>сумма категория [описание]</b>\n"
+                "Пример: <code>1000 продукты магазин</code>",
+                parse_mode='HTML'
+            )
+            return WAITING_FOR_TEST_INPUT
+        
+        # Парсим сумму (первое слово)
+        try:
+            amount = parse_number(parts[0])
+            if amount <= 0:
+                raise ValueError("Сумма должна быть положительной")
+        except ValueError:
+            await update.message.reply_text(
+                "Неверный формат суммы. Введите число в целых рублях.\n"
+                "Пример: <code>1000</code> или <code>10 000</code>",
+                parse_mode='HTML'
+            )
+            return WAITING_FOR_TEST_INPUT
+        
+        # Ищем категорию по второму слову
+        category_word = parts[1]
+        category_type = "Расходы" if context.user_data['fact_type'] == "расход" else "Доходы"
+        categories = sheets_manager.get_categories(category_type)
+        
+        if not categories:
+            await update.message.reply_text(
+                f"Категории для {category_type.lower()} не найдены в таблице."
+            )
+            return ConversationHandler.END
+        
+        category = find_closest_category(category_word, categories)
+        
+        if not category:
+            await update.message.reply_text(
+                f"Категория не найдена. Доступные категории: {', '.join(categories[:5])}..."
+            )
+            return WAITING_FOR_TEST_INPUT
+        
+        # Описание - все остальные слова (если есть)
+        description = " ".join(parts[2:]) if len(parts) > 2 else ""
+        
+        # Сохраняем данные
+        context.user_data['amount'] = amount
+        context.user_data['category'] = category
+        context.user_data['description'] = description
+        
+        # Записываем в таблицу
+        username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
+        success = sheets_manager.add_record(
+            fact_type=context.user_data['fact_type'],
+            amount=amount,
+            category=category,
+            description=description,
+            username=username,
+            is_plan=False
+        )
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ Данные успешно записаны!\n\n"
+                f"Тип: <b>{context.user_data['fact_type']}</b>\n"
+                f"Сумма: <b>{format_number(amount)} руб.</b>\n"
+                f"Категория: <b>{category}</b>\n"
+                f"{'Описание: ' + description if description else ''}",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка при записи данных. Попробуйте еще раз."
+            )
+        
+        # Очищаем данные
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"Ошибка в test_input_handler: {e}")
+        await update.message.reply_text(
+            "Произошла ошибка. Попробуйте еще раз.\n"
+            "Формат: <b>сумма категория [описание]</b>",
+            parse_mode='HTML'
+        )
+        return WAITING_FOR_TEST_INPUT
 
 
 async def start_input_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -423,9 +581,48 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
+# Глобальная переменная для хранения application (для перезапуска)
+application_instance = None
+
+
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /restart - перезапуск бота"""
+    # Получаем список администраторов из .env
+    admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
+    admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()] if admin_ids_str else []
+    
+    user_id = update.effective_user.id
+    
+    # Проверяем права доступа
+    if admin_ids and user_id not in admin_ids:
+        await update.message.reply_text(
+            "❌ У вас нет прав для выполнения этой команды."
+        )
+        return
+    
+    await update.message.reply_text(
+        "🔄 Перезапуск бота...\n"
+        "Пожалуйста, подождите несколько секунд."
+    )
+    
+    # Останавливаем бота
+    global application_instance
+    if application_instance:
+        logger.info(f"Перезапуск бота по запросу пользователя {user_id}")
+        # Останавливаем polling
+        await application_instance.stop()
+        # Завершаем процесс - внешний процесс (systemd/supervisor) перезапустит бота
+        import sys
+        sys.exit(0)
+    else:
+        await update.message.reply_text(
+            "❌ Ошибка: не удалось перезапустить бота."
+        )
+
+
 def main():
     """Основная функция запуска бота"""
-    global sheets_manager, sheet_url
+    global sheets_manager, sheet_url, application_instance
     
     # Загружаем переменные окружения
     load_env()
@@ -454,6 +651,7 @@ def main():
     
     # Создаем приложение
     application = Application.builder().token(bot_token).build()
+    application_instance = application  # Сохраняем для возможности перезапуска
     
     # Создаем ConversationHandler для основного потока ввода данных
     conv_handler = ConversationHandler(
@@ -487,6 +685,22 @@ def main():
         ]
     )
     
+    # Создаем ConversationHandler для команды /test
+    test_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("test", test_command)
+        ],
+        states={
+            WAITING_FOR_TEST_TYPE: [
+                CallbackQueryHandler(test_type_callback, pattern="^(expense|income)$")
+            ],
+            WAITING_FOR_TEST_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, test_input_handler)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)]
+    )
+    
     # Регистрируем обработчики
     # Команды /start, /help, /report, /plan должны работать вне ConversationHandler
     # /plan также в fallbacks ConversationHandler для работы во время разговора
@@ -496,6 +710,8 @@ def main():
     application.add_handler(CommandHandler("plan", plan_command))
     # ConversationHandler для основного потока ввода данных
     application.add_handler(conv_handler)
+    # ConversationHandler для команды /test
+    application.add_handler(test_conv_handler)
     
     # Добавляем обработчик ошибок
     async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
