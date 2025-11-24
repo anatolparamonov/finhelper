@@ -221,6 +221,17 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     logger.info(f"test_input_handler вызван для пользователя {user_id}")
     
+    # Проверяем, что мы в правильном состоянии
+    if not context.user_data.get('test_mode', False):
+        logger.warning(f"test_input_handler вызван, но test_mode не установлен для пользователя {user_id}")
+        try:
+            await update.message.reply_text(
+                "Ошибка: режим быстрого ввода не активен. Используйте /test для начала."
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+        return ConversationHandler.END
+    
     try:
         text = update.message.text.strip()
         logger.info(f"Получен текст от пользователя {user_id}: '{text}'")
@@ -268,14 +279,18 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 return WAITING_FOR_TEST_INPUT
             
             category = find_closest_category(category_word, categories)
-            logger.info(f"Найденная категория: {category}")
+            logger.info(f"Найденная категория для '{category_word}': {category}")
             
             if not category:
-                logger.warning(f"Категория '{category_word}' не найдена для пользователя {user_id}")
+                logger.warning(f"Категория '{category_word}' не найдена для пользователя {user_id}. Доступные: {categories}")
+                category_list = ', '.join(categories[:10]) if len(categories) > 10 else ', '.join(categories)
                 await update.message.reply_text(
-                    f"Категория '{category_word}' не найдена.\n\n"
-                    f"Доступные категории: {', '.join(categories[:10])}"
+                    f"❌ Категория '<b>{category_word}</b>' не найдена.\n\n"
+                    f"Доступные категории:\n{category_list}\n\n"
+                    f"Попробуйте ввести еще раз с правильной категорией.",
+                    parse_mode='HTML'
                 )
+                logger.info(f"Отправлено сообщение об ошибке пользователю {user_id}")
                 return WAITING_FOR_TEST_INPUT
         except Exception as e:
             logger.error(f"Ошибка при поиске категории для пользователя {user_id}: {e}", exc_info=True)
@@ -311,41 +326,55 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             logger.info(f"Результат записи в таблицу для пользователя {user_id}: {success}")
             
             if success:
-                await update.message.reply_text(
-                    f"✅ Данные успешно записаны в таблицу!\n\n"
-                    f"Тип: <b>{fact_type}</b>\n"
-                    f"Сумма: <b>{format_number(amount)} руб.</b>\n"
-                    f"Категория: <b>{category}</b>\n"
-                    f"{'Описание: ' + description if description else ''}\n\n"
-                    "Выберите следующее действие:",
-                    parse_mode='HTML',
-                    reply_markup=get_test_continue_keyboard()
-                )
+                logger.info(f"Данные успешно записаны для пользователя {user_id}, отправка подтверждения")
+                try:
+                    await update.message.reply_text(
+                        f"✅ Данные успешно записаны в таблицу!\n\n"
+                        f"Тип: <b>{fact_type}</b>\n"
+                        f"Сумма: <b>{format_number(amount)} руб.</b>\n"
+                        f"Категория: <b>{category}</b>\n"
+                        f"{'Описание: ' + description if description else ''}\n\n"
+                        "Выберите следующее действие:",
+                        parse_mode='HTML',
+                        reply_markup=get_test_continue_keyboard()
+                    )
+                    logger.info(f"Подтверждение отправлено пользователю {user_id}")
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке подтверждения пользователю {user_id}: {e}", exc_info=True)
+                
                 # Сохраняем test_mode для продолжения
                 test_mode = context.user_data.get('test_mode', False)
                 context.user_data.clear()
                 context.user_data['test_mode'] = test_mode
+                logger.info(f"test_mode сохранен для пользователя {user_id}: {test_mode}")
                 return WAITING_FOR_TEST_TYPE
             else:
+                logger.error(f"Запись в таблицу не удалась для пользователя {user_id}")
                 await update.message.reply_text(
                     "❌ Ошибка при записи данных. Попробуйте еще раз."
                 )
                 return WAITING_FOR_TEST_INPUT
         except Exception as e:
-            logger.error(f"Ошибка при записи в таблицу: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"❌ Произошла ошибка при записи данных: {str(e)}\n"
-                "Попробуйте еще раз."
-            )
+            logger.error(f"Ошибка при записи в таблицу для пользователя {user_id}: {e}", exc_info=True)
+            try:
+                await update.message.reply_text(
+                    f"❌ Произошла ошибка при записи данных: {str(e)}\n"
+                    "Попробуйте еще раз."
+                )
+            except Exception as send_error:
+                logger.error(f"Не удалось отправить сообщение об ошибке пользователю {user_id}: {send_error}")
             return WAITING_FOR_TEST_INPUT
         
     except Exception as e:
-        logger.error(f"Ошибка в test_input_handler: {e}")
-        await update.message.reply_text(
-            "Произошла ошибка. Попробуйте еще раз.\n"
-            "Формат: <b>сумма категория [описание]</b>",
-            parse_mode='HTML'
-        )
+        logger.error(f"Критическая ошибка в test_input_handler для пользователя {user_id}: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(
+                "❌ Произошла ошибка. Попробуйте еще раз.\n"
+                "Формат: <b>сумма категория [описание]</b>",
+                parse_mode='HTML'
+            )
+        except Exception as send_error:
+            logger.error(f"Не удалось отправить сообщение об ошибке пользователю {user_id}: {send_error}")
         return WAITING_FOR_TEST_INPUT
 
 
@@ -815,13 +844,20 @@ def main():
         """Обработчик ошибок"""
         logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
         
-        if update and update.effective_message:
+        if update:
             try:
-                await update.effective_message.reply_text(
-                    "Произошла ошибка при обработке запроса. Попробуйте еще раз или используйте /start для начала работы."
-                )
-            except Exception:
-                pass  # Игнорируем ошибки при отправке сообщения об ошибке
+                if update.effective_message:
+                    await update.effective_message.reply_text(
+                        "❌ Произошла ошибка при обработке запроса.\n\n"
+                        "Попробуйте еще раз или используйте /start для начала работы."
+                    )
+                elif update.callback_query:
+                    await update.callback_query.answer("Произошла ошибка. Попробуйте еще раз.")
+                    await update.callback_query.message.reply_text(
+                        "❌ Произошла ошибка. Попробуйте еще раз или используйте /start."
+                    )
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение об ошибке: {e}")
     
     application.add_error_handler(error_handler)
     

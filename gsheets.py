@@ -124,22 +124,31 @@ class GoogleSheetsManager:
             
             # Записываем данные
             # Структура: Дата, Время, Факт, Сумма, Категория, Описание, Пользователь, План
+            logger.info(f"Запись данных в строку {next_row}")
             self.sheet.update(f"A{next_row}", date_str)
+            logger.info(f"Записана дата: {date_str}")
             self.sheet.update(f"B{next_row}", time_str)
+            logger.info(f"Записано время: {time_str}")
             
             if is_plan:
                 # Для плана: в столбец C ничего не записываем (или пусто), в столбец H записываем "расход" или "доход"
                 self.sheet.update(f"C{next_row}", "")  # Столбец Факт пустой для плана
                 self.sheet.update(f"H{next_row}", fact_type)  # Столбец План - "расход" или "доход"
+                logger.info(f"Запись плана: столбец H = {fact_type}")
             else:
                 # Для факта: в столбец C записываем "расход" или "доход", столбец H пустой
                 self.sheet.update(f"C{next_row}", fact_plan_value)  # Столбец Факт
                 self.sheet.update(f"H{next_row}", "")  # Столбец План пустой для факта
+                logger.info(f"Запись факта: столбец C = {fact_plan_value}")
             
             self.sheet.update(f"D{next_row}", format_number(amount))
+            logger.info(f"Записана сумма: {format_number(amount)}")
             self.sheet.update(f"E{next_row}", category)
+            logger.info(f"Записана категория: {category}")
             self.sheet.update(f"F{next_row}", description)
+            logger.info(f"Записано описание: {description}")
             self.sheet.update(f"G{next_row}", username)
+            logger.info(f"Записан пользователь: {username}")
             
             # Применяем цвет к ячейке суммы (только для фактических записей)
             if not is_plan:
@@ -156,8 +165,9 @@ class GoogleSheetsManager:
                     "backgroundColor": color
                 })
             
+            logger.info(f"Запись успешно завершена для строки {next_row}")
             return True
         except Exception as e:
-            print(f"Ошибка при добавлении записи: {e}")
+            logger.error(f"Ошибка при добавлении записи: {e}", exc_info=True)
             return False
 
