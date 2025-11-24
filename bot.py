@@ -131,10 +131,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "5. Введите описание (или нажмите Enter для пропуска)\n"
         "6. Подтвердите или отмените запись\n\n"
         "<b>Быстрый ввод (/test):</b>\n"
-        "1. Выберите Расходы или Доходы\n"
-        "2. Введите: <code>сумма категория [описание]</code>\n"
-        "Пример: <code>1000 продукты магазин</code>\n"
-        "или: <code>50000 зарплата</code>"
+        "Введите: <code>+/- сумма категория [описание]</code>\n\n"
+        "Примеры:\n"
+        "<code>+ 1000 продукты магазин</code> - доход\n"
+        "<code>- 5000 транспорт</code> - расход\n"
+        "<code>+ 50000 зарплата</code> - доход"
     )
     await update.message.reply_text(help_text, parse_mode='HTML')
 
