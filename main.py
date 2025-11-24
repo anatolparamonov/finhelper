@@ -1,2 +1,5 @@
-print("Привет, мир!")
-print("Привет, мир!")
+"""Точка входа для запуска Telegram бота"""
+from bot import main
+
+if __name__ == "__main__":
+    main()
