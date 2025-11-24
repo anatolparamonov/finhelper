@@ -371,7 +371,7 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 context.user_data.clear()
                 context.user_data['test_mode'] = test_mode
                 logger.info(f"test_mode сохранен для пользователя {user_id}: {test_mode}")
-                return WAITING_FOR_TEST_TYPE
+                return WAITING_FOR_TEST_INPUT
             else:
                 logger.error(f"Запись в таблицу не удалась для пользователя {user_id}")
                 await update.message.reply_text(
@@ -842,13 +842,9 @@ def main():
             CommandHandler("test", test_command)
         ],
         states={
-            WAITING_FOR_TEST_TYPE: [
-                CallbackQueryHandler(expense_income_callback, pattern="^(expense|income)$"),
-                CallbackQueryHandler(test_continue_callback, pattern="^test_continue$"),
-                CallbackQueryHandler(test_start_callback, pattern="^test_start$")
-            ],
             WAITING_FOR_TEST_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, test_input_handler),
+                CallbackQueryHandler(test_continue_callback, pattern="^test_continue$"),
                 CallbackQueryHandler(test_start_callback, pattern="^test_start$")
             ]
         },
