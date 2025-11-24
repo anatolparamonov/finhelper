@@ -121,7 +121,8 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sheet_url:
         await update.message.reply_text(
             f"📊 Ссылка на таблицу:\n{sheet_url}\n\n"
-            "Возвращаемся к началу ввода данных.",
+            "Возвращаемся к началу ввода данных.\n\n"
+            "Выберите тип операции:",
             reply_markup=get_main_keyboard()
         )
     else:
@@ -130,7 +131,6 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Выберите тип операции:",
             reply_markup=get_main_keyboard()
         )
-    return WAITING_FOR_AMOUNT
 
 
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -335,18 +335,24 @@ async def confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Выберите следующее действие:",
             reply_markup=get_main_keyboard() if not is_plan else get_plan_continue_keyboard()
         )
+        
+        # Очищаем данные для следующего ввода, но сохраняем is_plan для плана
+        if is_plan:
+            # Сохраняем флаг is_plan перед очисткой
+            plan_flag = context.user_data.get('is_plan', False)
+            context.user_data.clear()
+            context.user_data['is_plan'] = plan_flag
+            return WAITING_FOR_AMOUNT
+        else:
+            context.user_data.clear()
+            context.user_data['is_plan'] = False
+            return WAITING_FOR_AMOUNT
     else:
         await query.edit_message_text(
             "❌ Ошибка при записи данных. Попробуйте еще раз.",
             reply_markup=get_main_keyboard()
         )
-    
-    if is_plan:
-        return WAITING_FOR_AMOUNT
-    else:
-        context.user_data.clear()
-        context.user_data['is_plan'] = False
-        return WAITING_FOR_AMOUNT
+        return ConversationHandler.END
 
 
 async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -442,8 +448,7 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(start_input_callback, pattern="^start_input$"),
-            CommandHandler("plan", plan_command),
-            CommandHandler("report", report_command)
+            CommandHandler("plan", plan_command)
         ],
         states={
             WAITING_FOR_AMOUNT: [
@@ -468,9 +473,11 @@ def main():
     )
     
     # Регистрируем обработчики
+    # Команды /start, /help, /report должны работать вне ConversationHandler
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    # report_command теперь в entry_points ConversationHandler
+    application.add_handler(CommandHandler("report", report_command))
+    # ConversationHandler для основного потока ввода данных
     application.add_handler(conv_handler)
     
     # Добавляем обработчик ошибок
