@@ -186,34 +186,46 @@ def find_closest_category(search_word: str, categories: list) -> str:
         if search_word_lower == category.lower():
             return category
     
-    # Затем ищем вхождение подстроки
+    # Затем ищем вхождение подстроки (категория содержит поисковое слово или наоборот)
     for category in categories:
-        if search_word_lower in category.lower() or category.lower() in search_word_lower:
+        category_lower = category.lower()
+        if search_word_lower in category_lower or category_lower in search_word_lower:
             return category
     
-    # Если ничего не найдено, возвращаем первую категорию
-    return categories[0] if categories else None
+    # Если ничего не найдено, возвращаем None (не первую категорию)
+    return None
 
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /test - быстрый ввод данных"""
+    user_id = update.effective_user.id
+    logger.info(f"Команда /test от пользователя {user_id}")
+    
     context.user_data.clear()
     context.user_data['is_plan'] = False
     context.user_data['test_mode'] = True
+    
+    logger.info(f"test_mode установлен для пользователя {user_id}")
     
     await update.message.reply_text(
         "Быстрый ввод данных.\n"
         "Выберите тип операции:",
         reply_markup=get_main_keyboard()
     )
+    logger.info(f"Сообщение отправлено пользователю {user_id}, возвращаем WAITING_FOR_TEST_TYPE")
     return WAITING_FOR_TEST_TYPE
 
 
 async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ввода данных для /test"""
+    user_id = update.effective_user.id
+    logger.info(f"test_input_handler вызван для пользователя {user_id}")
+    
     try:
         text = update.message.text.strip()
+        logger.info(f"Получен текст от пользователя {user_id}: '{text}'")
         parts = text.split()
+        logger.info(f"Разделено на части: {parts}")
         
         if len(parts) < 2:
             await update.message.reply_text(
@@ -225,10 +237,13 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         # Парсим сумму (первое слово)
         try:
+            logger.info(f"Парсинг суммы из '{parts[0]}'")
             amount = parse_number(parts[0])
+            logger.info(f"Распарсенная сумма: {amount}")
             if amount <= 0:
                 raise ValueError("Сумма должна быть положительной")
-        except ValueError:
+        except (ValueError, IndexError) as e:
+            logger.error(f"Ошибка парсинга суммы для пользователя {user_id}: {e}")
             await update.message.reply_text(
                 "Неверный формат суммы. Введите число в целых рублях.\n"
                 "Пример: <code>1000</code> или <code>10 000</code>",
@@ -237,21 +252,35 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return WAITING_FOR_TEST_INPUT
         
         # Ищем категорию по второму слову
-        category_word = parts[1]
-        category_type = "Расходы" if context.user_data['fact_type'] == "расход" else "Доходы"
-        categories = sheets_manager.get_categories(category_type)
-        
-        if not categories:
+        try:
+            category_word = parts[1]
+            logger.info(f"Поиск категории по слову '{category_word}'")
+            fact_type = context.user_data.get('fact_type', 'расход')
+            category_type = "Расходы" if fact_type == "расход" else "Доходы"
+            logger.info(f"Тип операции: {fact_type}, тип категории: {category_type}")
+            categories = sheets_manager.get_categories(category_type)
+            logger.info(f"Получено категорий: {len(categories)} - {categories[:5]}")
+            
+            if not categories:
+                await update.message.reply_text(
+                    f"Категории для {category_type.lower()} не найдены в таблице."
+                )
+                return WAITING_FOR_TEST_INPUT
+            
+            category = find_closest_category(category_word, categories)
+            logger.info(f"Найденная категория: {category}")
+            
+            if not category:
+                logger.warning(f"Категория '{category_word}' не найдена для пользователя {user_id}")
+                await update.message.reply_text(
+                    f"Категория '{category_word}' не найдена.\n\n"
+                    f"Доступные категории: {', '.join(categories[:10])}"
+                )
+                return WAITING_FOR_TEST_INPUT
+        except Exception as e:
+            logger.error(f"Ошибка при поиске категории для пользователя {user_id}: {e}", exc_info=True)
             await update.message.reply_text(
-                f"Категории для {category_type.lower()} не найдены в таблице."
-            )
-            return ConversationHandler.END
-        
-        category = find_closest_category(category_word, categories)
-        
-        if not category:
-            await update.message.reply_text(
-                f"Категория не найдена. Доступные категории: {', '.join(categories[:5])}..."
+                "Ошибка при поиске категории. Попробуйте еще раз."
             )
             return WAITING_FOR_TEST_INPUT
         
@@ -264,35 +293,49 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data['description'] = description
         
         # Записываем в таблицу
-        username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
-        success = sheets_manager.add_record(
-            fact_type=context.user_data['fact_type'],
-            amount=amount,
-            category=category,
-            description=description,
-            username=username,
-            is_plan=False
-        )
-        
-        if success:
-            await update.message.reply_text(
-                f"✅ Данные успешно записаны в таблицу!\n\n"
-                f"Тип: <b>{context.user_data['fact_type']}</b>\n"
-                f"Сумма: <b>{format_number(amount)} руб.</b>\n"
-                f"Категория: <b>{category}</b>\n"
-                f"{'Описание: ' + description if description else ''}\n\n"
-                "Выберите следующее действие:",
-                parse_mode='HTML',
-                reply_markup=get_test_continue_keyboard()
+        try:
+            username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
+            fact_type = context.user_data.get('fact_type', 'расход')
+            
+            logger.info(f"Начало записи данных через /test для пользователя {user_id}: {fact_type}, {amount}, {category}, {description}, {username}")
+            
+            success = sheets_manager.add_record(
+                fact_type=fact_type,
+                amount=amount,
+                category=category,
+                description=description,
+                username=username,
+                is_plan=False
             )
-            # Сохраняем test_mode для продолжения
-            test_mode = context.user_data.get('test_mode', False)
-            context.user_data.clear()
-            context.user_data['test_mode'] = test_mode
-            return WAITING_FOR_TEST_TYPE
-        else:
+            
+            logger.info(f"Результат записи в таблицу для пользователя {user_id}: {success}")
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ Данные успешно записаны в таблицу!\n\n"
+                    f"Тип: <b>{fact_type}</b>\n"
+                    f"Сумма: <b>{format_number(amount)} руб.</b>\n"
+                    f"Категория: <b>{category}</b>\n"
+                    f"{'Описание: ' + description if description else ''}\n\n"
+                    "Выберите следующее действие:",
+                    parse_mode='HTML',
+                    reply_markup=get_test_continue_keyboard()
+                )
+                # Сохраняем test_mode для продолжения
+                test_mode = context.user_data.get('test_mode', False)
+                context.user_data.clear()
+                context.user_data['test_mode'] = test_mode
+                return WAITING_FOR_TEST_TYPE
+            else:
+                await update.message.reply_text(
+                    "❌ Ошибка при записи данных. Попробуйте еще раз."
+                )
+                return WAITING_FOR_TEST_INPUT
+        except Exception as e:
+            logger.error(f"Ошибка при записи в таблицу: {e}", exc_info=True)
             await update.message.reply_text(
-                "❌ Ошибка при записи данных. Попробуйте еще раз."
+                f"❌ Произошла ошибка при записи данных: {str(e)}\n"
+                "Попробуйте еще раз."
             )
             return WAITING_FOR_TEST_INPUT
         
@@ -324,13 +367,20 @@ async def start_input_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def expense_income_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора Расходы/Доходы"""
     query = update.callback_query
+    user_id = update.effective_user.id
+    logger.info(f"expense_income_callback вызван для пользователя {user_id}, data: {query.data}")
+    
     await query.answer()
     
     fact_type = "расход" if query.data == "expense" else "доход"
     context.user_data['fact_type'] = fact_type
+    logger.info(f"Установлен fact_type: {fact_type} для пользователя {user_id}")
     
     # Проверяем, находимся ли мы в режиме /test
-    if context.user_data.get('test_mode', False):
+    test_mode = context.user_data.get('test_mode', False)
+    logger.info(f"test_mode для пользователя {user_id}: {test_mode}")
+    
+    if test_mode:
         # Режим быстрого ввода /test
         await query.edit_message_text(
             f"Вы выбрали: <b>{fact_type}</b>\n\n"
@@ -737,7 +787,8 @@ def main():
         states={
             WAITING_FOR_TEST_TYPE: [
                 CallbackQueryHandler(expense_income_callback, pattern="^(expense|income)$"),
-                CallbackQueryHandler(test_continue_callback, pattern="^test_continue$")
+                CallbackQueryHandler(test_continue_callback, pattern="^test_continue$"),
+                CallbackQueryHandler(test_start_callback, pattern="^test_start$")
             ],
             WAITING_FOR_TEST_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, test_input_handler),

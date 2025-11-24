@@ -49,8 +49,13 @@ class GoogleSheetsManager:
         Returns:
             Список категорий
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
+            logger.info(f"Получение категорий типа: {category_type}")
             categories_sheet = self.client.open_by_key(self.sheet_id).worksheet("Категории")
+            logger.info("Лист 'Категории' открыт")
             
             # Определяем столбец по типу
             # Расходы - столбец B (индекс 2), Доходы - столбец A (индекс 1)
@@ -59,15 +64,19 @@ class GoogleSheetsManager:
             elif category_type == "Доходы":
                 column_index = 1  # Столбец A
             else:
+                logger.warning(f"Неизвестный тип категории: {category_type}")
                 return []
             
+            logger.info(f"Чтение столбца {column_index} для типа {category_type}")
             # Получаем все значения из столбца (игнорируя заголовок)
             values = categories_sheet.col_values(column_index)
+            logger.info(f"Получено значений из столбца: {len(values)}")
             # Убираем заголовок и пустые значения
             categories = [v.strip() for v in values[1:] if v.strip()]
+            logger.info(f"Обработано категорий: {len(categories)} - {categories[:5]}")
             return categories
         except Exception as e:
-            print(f"Ошибка при получении категорий: {e}")
+            logger.error(f"Ошибка при получении категорий: {e}", exc_info=True)
             return []
     
     def add_record(
@@ -90,11 +99,16 @@ class GoogleSheetsManager:
             username: Имя пользователя Telegram
             is_plan: True если это запланированная запись
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
+            logger.info(f"Начало записи: {fact_type}, {amount}, {category}, {description}, {username}, is_plan={is_plan}")
             # Получаем текущую дату и время
             now = datetime.now()
             date_str = now.strftime("%d.%m.%Y")
             time_str = now.strftime("%H:%M:%S")
+            logger.info(f"Дата и время: {date_str} {time_str}")
             
             # Определяем значение для столбца Факт/План
             # По требованию: для плана в столбец "План" записывается "расход" или "доход"
@@ -103,8 +117,10 @@ class GoogleSheetsManager:
             fact_plan_value = fact_type  # Записываем "расход" или "доход" (и для факта, и для плана)
             
             # Находим первую пустую строку
+            logger.info("Получение всех значений из таблицы")
             all_values = self.sheet.get_all_values()
             next_row = len(all_values) + 1
+            logger.info(f"Следующая строка для записи: {next_row}")
             
             # Записываем данные
             # Структура: Дата, Время, Факт, Сумма, Категория, Описание, Пользователь, План
