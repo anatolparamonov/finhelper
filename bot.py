@@ -21,6 +21,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Отключаем логирование HTTP запросов от httpx и telegram
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.WARNING)
+
 # Состояния для ConversationHandler
 WAITING_FOR_AMOUNT, WAITING_FOR_CATEGORY, WAITING_FOR_DESCRIPTION, CONFIRMING = range(4)
 
@@ -141,6 +146,7 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Выберите тип:",
         reply_markup=get_main_keyboard()
     )
+    return WAITING_FOR_AMOUNT
     return WAITING_FOR_AMOUNT
 
 
@@ -376,6 +382,7 @@ async def continue_plan_callback(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
     
+    # Очищаем данные, но сохраняем режим плана
     context.user_data.clear()
     context.user_data['is_plan'] = True
     
@@ -450,9 +457,12 @@ def main():
             CallbackQueryHandler(start_input_callback, pattern="^start_input$"),
             CommandHandler("plan", plan_command)
         ],
+        per_message=True,  # Отслеживать CallbackQuery для каждого сообщения
         states={
             WAITING_FOR_AMOUNT: [
                 CallbackQueryHandler(expense_income_callback, pattern="^(expense|income)$"),
+                CallbackQueryHandler(continue_plan_callback, pattern="^continue_plan$"),
+                CallbackQueryHandler(back_to_fact_callback, pattern="^back_to_fact$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, amount_handler)
             ],
             WAITING_FOR_CATEGORY: [

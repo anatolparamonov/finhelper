@@ -107,10 +107,19 @@ class GoogleSheetsManager:
             next_row = len(all_values) + 1
             
             # Записываем данные
-            # Предполагаем структуру: Дата, Время, Факт/План, Сумма, Категория, Описание, Пользователь
+            # Структура: Дата, Время, Факт, Сумма, Категория, Описание, Пользователь, План
             self.sheet.update(f"A{next_row}", date_str)
             self.sheet.update(f"B{next_row}", time_str)
-            self.sheet.update(f"C{next_row}", fact_plan_value)
+            
+            if is_plan:
+                # Для плана: в столбец C ничего не записываем (или пусто), в столбец H записываем "расход" или "доход"
+                self.sheet.update(f"C{next_row}", "")  # Столбец Факт пустой для плана
+                self.sheet.update(f"H{next_row}", fact_type)  # Столбец План - "расход" или "доход"
+            else:
+                # Для факта: в столбец C записываем "расход" или "доход", столбец H пустой
+                self.sheet.update(f"C{next_row}", fact_plan_value)  # Столбец Факт
+                self.sheet.update(f"H{next_row}", "")  # Столбец План пустой для факта
+            
             self.sheet.update(f"D{next_row}", format_number(amount))
             self.sheet.update(f"E{next_row}", category)
             self.sheet.update(f"F{next_row}", description)
