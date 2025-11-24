@@ -26,6 +26,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
+# Отключаем предупреждения PTBUserWarning
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
+
 # Состояния для ConversationHandler
 WAITING_FOR_AMOUNT, WAITING_FOR_CATEGORY, WAITING_FOR_DESCRIPTION, CONFIRMING = range(4)
 
@@ -454,10 +458,8 @@ def main():
     # Создаем ConversationHandler для основного потока ввода данных
     conv_handler = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(start_input_callback, pattern="^start_input$"),
-            CommandHandler("plan", plan_command)
+            CallbackQueryHandler(start_input_callback, pattern="^start_input$")
         ],
-        per_message=True,  # Отслеживать CallbackQuery для каждого сообщения
         states={
             WAITING_FOR_AMOUNT: [
                 CallbackQueryHandler(expense_income_callback, pattern="^(expense|income)$"),
@@ -479,14 +481,19 @@ def main():
                 CallbackQueryHandler(back_to_fact_callback, pattern="^back_to_fact$")
             ]
         },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)]
+        fallbacks=[
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("plan", plan_command)  # Команда /plan работает в любом состоянии
+        ]
     )
     
     # Регистрируем обработчики
-    # Команды /start, /help, /report должны работать вне ConversationHandler
+    # Команды /start, /help, /report, /plan должны работать вне ConversationHandler
+    # /plan также в fallbacks ConversationHandler для работы во время разговора
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", report_command))
+    application.add_handler(CommandHandler("plan", plan_command))
     # ConversationHandler для основного потока ввода данных
     application.add_handler(conv_handler)
     
