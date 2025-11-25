@@ -215,7 +215,7 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Примеры:\n"
         "<code>+ 1000 продукты магазин</code> - доход\n"
         "<code>- 5000 транспорт</code> - расход\n"
-        "<code>+ 50000 зарплата</code> - доход",
+        "<code>+50000 зарплата</code> - доход (без пробела между знаком и суммой тоже можно)",
         parse_mode='HTML'
     )
     logger.info(f"Сообщение отправлено пользователю {user_id}, возвращаем WAITING_FOR_TEST_INPUT")
@@ -244,7 +244,7 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parts = text.split()
         logger.info(f"Разделено на части: {parts}")
         
-        if len(parts) < 3:
+        if len(parts) < 2:
             await update.message.reply_text(
                 "Неверный формат. Введите: <b>+/- сумма категория [описание]</b>\n\n"
                 "Примеры:\n"
@@ -254,27 +254,52 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return WAITING_FOR_TEST_INPUT
         
-        # Парсим тип операции (первый символ: + или -)
-        type_symbol = parts[0]
-        if type_symbol == "+":
-            fact_type = "доход"
-        elif type_symbol == "-":
-            fact_type = "расход"
-        else:
-            await update.message.reply_text(
-                "Неверный формат. Первый символ должен быть <b>+</b> (доход) или <b>-</b> (расход).\n\n"
-                "Пример: <code>+ 1000 продукты</code> или <code>- 5000 транспорт</code>",
-                parse_mode='HTML'
-            )
-            return WAITING_FOR_TEST_INPUT
+        # Парсим тип операции и сумму
+        symbol = None
+        amount_text = None
+        category_index = None
         
-        logger.info(f"Определен тип операции: {fact_type} (символ: {type_symbol})")
+        first_token = parts[0]
+        if first_token in ("+", "-"):
+            symbol = first_token
+            if len(parts) < 3:
+                await update.message.reply_text(
+                    "Неверный формат. После знака укажите сумму и категорию.\n\n"
+                    "Пример: <code>+ 1000 продукты</code>",
+                    parse_mode='HTML'
+                )
+                return WAITING_FOR_TEST_INPUT
+            amount_text = parts[1]
+            category_index = 2
+        else:
+            # Возможно, знак и сумма в одном токене (+1000)
+            if first_token.startswith("+") or first_token.startswith("-"):
+                symbol = first_token[0]
+                amount_text = first_token[1:]
+                category_index = 1
+                if not amount_text:
+                    await update.message.reply_text(
+                        "После знака необходимо указать число.\n\n"
+                        "Пример: <code>+1000 продукты</code>",
+                        parse_mode='HTML'
+                    )
+                    return WAITING_FOR_TEST_INPUT
+            else:
+                await update.message.reply_text(
+                    "Первый символ должен быть <b>+</b> (доход) или <b>-</b> (расход).\n\n"
+                    "Пример: <code>+ 1000 продукты</code> или <code>-5000 транспорт</code>",
+                    parse_mode='HTML'
+                )
+                return WAITING_FOR_TEST_INPUT
+        
+        fact_type = "доход" if symbol == "+" else "расход"
+        logger.info(f"Определен тип операции: {fact_type} (символ: {symbol})")
         context.user_data['fact_type'] = fact_type
         
-        # Парсим сумму (второе слово)
+        # Парсим сумму
         try:
-            logger.info(f"Парсинг суммы из '{parts[1]}'")
-            amount = parse_number(parts[1])
+            logger.info(f"Парсинг суммы из '{amount_text}'")
+            amount = parse_number(amount_text)
             logger.info(f"Распарсенная сумма: {amount}")
             if amount <= 0:
                 raise ValueError("Сумма должна быть положительной")
@@ -282,14 +307,22 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             logger.error(f"Ошибка парсинга суммы для пользователя {user_id}: {e}")
             await update.message.reply_text(
                 "Неверный формат суммы. Введите число в целых рублях.\n"
-                "Пример: <code>+ 1000</code> или <code>- 10 000</code>",
+                "Пример: <code>+ 1000</code> или <code>-10 000</code>",
                 parse_mode='HTML'
             )
             return WAITING_FOR_TEST_INPUT
         
-        # Ищем категорию по третьему слову
+        # Ищем категорию по следующему слову
         try:
-            category_word = parts[2]
+            if len(parts) <= category_index:
+                await update.message.reply_text(
+                    "Укажите категорию после суммы.\n\n"
+                    "Пример: <code>+ 1000 продукты</code>",
+                    parse_mode='HTML'
+                )
+                return WAITING_FOR_TEST_INPUT
+            
+            category_word = parts[category_index]
             logger.info(f"Поиск категории по слову '{category_word}'")
             category_type = "Расходы" if fact_type == "расход" else "Доходы"
             logger.info(f"Тип операции: {fact_type}, тип категории: {category_type}")
@@ -323,8 +356,9 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return WAITING_FOR_TEST_INPUT
         
-        # Описание - все остальные слова (если есть, начиная с 4-го)
-        description = " ".join(parts[3:]) if len(parts) > 3 else ""
+        # Описание - все остальные слова (если есть) после категории
+        description_parts = parts[category_index + 1 :] if len(parts) > category_index + 1 else []
+        description = " ".join(description_parts)
         
         # Сохраняем данные
         context.user_data['amount'] = amount
@@ -825,11 +859,8 @@ def main():
         context.user_data['test_mode'] = True
         await query.edit_message_text(
             "Продолжаем быстрый ввод данных.\n\n"
-            "Введите данные через пробел:\n"
-            "<b>+/- сумма категория [описание]</b>\n\n"
-            "Примеры:\n"
-            "<code>+ 1000 продукты магазин</code> - доход\n"
-            "<code>- 5000 транспорт</code> - расход",
+            "Введите: <b>+/- сумма категория [описание]</b>\n"
+            "Примеры: <code>+ 1000 продукты</code>, <code>-5000 транспорт</code>",
             parse_mode='HTML'
         )
         return WAITING_FOR_TEST_INPUT
