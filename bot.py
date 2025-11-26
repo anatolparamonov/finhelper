@@ -215,6 +215,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/report - Получить ссылку на таблицу\n"
         "/plan - Ввести запланированные расходы/доходы\n"
         "/test - Быстрый ввод данных одной строкой\n"
+        "/reminders - Управление напоминаниями\n"
         "/restart - Перезапустить бота (только для администраторов)\n"
         "/help - Показать эту справку\n\n"
         "<b>Обычный ввод:</b>\n"
@@ -229,9 +230,110 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Примеры:\n"
         "<code>+ 1000 продукты магазин</code> - доход\n"
         "<code>- 5000 транспорт</code> - расход\n"
-        "<code>+ 50000 зарплата</code> - доход"
+        "<code>+ 50000 зарплата</code> - доход\n\n"
+        "<b>Напоминания:</b>\n"
+        "🌅 Утром в 8:00 - напоминание записать расходы\n"
+        "🌙 Вечером в 22:20 - напоминание подвести итоги дня"
     )
     await update.message.reply_text(help_text, parse_mode='HTML')
+
+
+async def reminders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /reminders - управление напоминаниями"""
+    user_id = update.effective_user.id
+    
+    # Проверяем права доступа (только админы)
+    admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
+    admin_ids = [int(id.strip()) for id in admin_ids_str.split(",") if id.strip()]
+    
+    if user_id not in admin_ids:
+        await update.message.reply_text(
+            "❌ У вас нет прав для управления напоминаниями."
+        )
+        return
+    
+    # Получаем информацию о текущих задачах
+    job_queue = context.application.job_queue
+    morning_jobs = job_queue.get_jobs_by_name("morning_reminder")
+    evening_jobs = job_queue.get_jobs_by_name("evening_reminder")
+    
+    status_text = "📅 <b>Статус напоминаний:</b>\n\n"
+    
+    if morning_jobs:
+        status_text += "🌅 Утреннее напоминание: ✅ Активно (8:00)\n"
+    else:
+        status_text += "🌅 Утреннее напоминание: ❌ Отключено\n"
+        
+    if evening_jobs:
+        status_text += "🌙 Вечернее напоминание: ✅ Активно (22:20)\n"
+    else:
+        status_text += "🌙 Вечернее напоминание: ❌ Отключено\n"
+    
+    status_text += "\n<b>Напоминания отправляются всем пользователям из ADMIN_USER_IDS</b>"
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Перезапустить напоминания", callback_data="restart_reminders")],
+        [InlineKeyboardButton("🧪 Тест утреннего", callback_data="test_morning")],
+        [InlineKeyboardButton("🧪 Тест вечернего", callback_data="test_evening")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        status_text,
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
+
+async def reminders_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопок управления напоминаниями"""
+    query = update.callback_query
+    await safe_answer_callback_query(query)
+    
+    user_id = update.effective_user.id
+    
+    # Проверяем права доступа
+    admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
+    admin_ids = [int(id.strip()) for id in admin_ids_str.split(",") if id.strip()]
+    
+    if user_id not in admin_ids:
+        await query.edit_message_text("❌ У вас нет прав для управления напоминаниями.")
+        return
+    
+    if query.data == "restart_reminders":
+        # Перезапускаем напоминания
+        job_queue = context.application.job_queue
+        
+        # Удаляем старые задачи
+        current_jobs = job_queue.jobs()
+        for job in current_jobs:
+            if job.name in ["morning_reminder", "evening_reminder"]:
+                job.schedule_removal()
+        
+        # Создаем новые
+        job_queue.run_daily(
+            send_morning_reminder,
+            time=time(hour=8, minute=0),
+            name="morning_reminder"
+        )
+        
+        job_queue.run_daily(
+            send_evening_reminder,
+            time=time(hour=22, minute=20), 
+            name="evening_reminder"
+        )
+        
+        await query.edit_message_text("✅ Напоминания перезапущены!")
+        
+    elif query.data == "test_morning":
+        # Тестируем утреннее напоминание
+        await send_morning_reminder(context)
+        await query.edit_message_text("✅ Тестовое утреннее напоминание отправлено!")
+        
+    elif query.data == "test_evening":
+        # Тестируем вечернее напоминание
+        await send_evening_reminder(context)
+        await query.edit_message_text("✅ Тестовое вечернее напоминание отправлено!")
 
 
 async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
