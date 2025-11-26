@@ -1138,7 +1138,11 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("plan", plan_command))
+    application.add_handler(CommandHandler("reminders", reminders_command))
     application.add_handler(CommandHandler("restart", restart_command))
+    
+    # Обработчик кнопок управления напоминаниями
+    application.add_handler(CallbackQueryHandler(reminders_callback, pattern="^(restart_reminders|test_morning|test_evening)$"))
     # ConversationHandler для команды /test (должен быть ПЕРЕД основным)
     application.add_handler(test_conv_handler)
     # ConversationHandler для основного потока ввода данных
