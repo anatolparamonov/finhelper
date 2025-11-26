@@ -1,7 +1,7 @@
 """Telegram бот для учета финансов"""
 import os
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -32,6 +32,24 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 # Отключаем предупреждения PTBUserWarning
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
+
+async def setup_bot_commands(application):
+    """Настройка меню команд бота"""
+    commands = [
+        BotCommand("start", "🏠 Главное меню"),
+        BotCommand("test", "⚡ Быстрый ввод данных"),
+        BotCommand("plan", "📋 Ввод планируемых расходов/доходов"),
+        BotCommand("report", "📊 Ссылка на таблицу с данными"),
+        BotCommand("reminders", "⏰ Настройка напоминаний"),
+        BotCommand("help", "❓ Справка по командам"),
+        BotCommand("restart", "🔄 Перезапуск бота (только для админа)")
+    ]
+    
+    try:
+        await application.bot.set_my_commands(commands)
+        logger.info("Меню команд бота настроено успешно")
+    except Exception as e:
+        logger.error(f"Ошибка настройки меню команд: {e}")
 
 async def safe_answer_callback_query(query):
     """Безопасный ответ на callback запрос с обработкой ошибок"""
@@ -411,7 +429,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>Обычный ввод:</b>\n"
         "1. Нажмите СТАРТ\n"
         "2. Выберите Расходы или Доходы\n"
-        "3. Введите сумму в целых рублях\n"
+        "3. Введите <u>только сумму</u> в целых рублях (например: <code>1000</code>)\n"
         "4. Выберите категорию\n"
         "5. Введите описание (или нажмите Enter для пропуска)\n"
         "6. Подтвердите или отмените запись\n\n"
@@ -894,10 +912,23 @@ async def expense_income_callback(update: Update, context: ContextTypes.DEFAULT_
 async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ввода суммы"""
     user_id = update.effective_user.id
-    logger.info(f"🔥 amount_handler ВЫЗВАН для пользователя {user_id}, текст: '{update.message.text}'")
+    text = update.message.text.strip()
+    logger.info(f"🔥 amount_handler ВЫЗВАН для пользователя {user_id}, текст: '{text}'")
+    
+    # Проверяем, не является ли это командой быстрого ввода (начинается с + или -)
+    if text.startswith(('+', '-')) and len(text.split()) >= 2:
+        logger.info(f"Обнаружен формат быстрого ввода в обычном режиме: '{text}'")
+        await update.message.reply_text(
+            "🚀 Обнаружен формат быстрого ввода!\n\n"
+            "Для быстрого ввода используйте команду <b>/test</b>\n\n"
+            "Или введите только сумму в рублях для обычного режима.\n"
+            "Например: <code>1000</code> или <code>10 000</code>",
+            parse_mode='HTML'
+        )
+        return WAITING_FOR_AMOUNT
     
     try:
-        amount = parse_number(update.message.text)
+        amount = parse_number(text)
         logger.info(f"Распарсенная сумма: {amount}")
         
         if amount <= 0:
@@ -948,9 +979,26 @@ async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except ValueError as e:
         logger.error(f"Ошибка парсинга суммы для пользователя {user_id}: {e}")
-        await update.message.reply_text(
-            "Неверный формат числа. Введите сумму в целых рублях (например: 10000):"
-        )
+        
+        # Проверяем, не пытается ли пользователь ввести быстрый формат
+        if any(char in text for char in ['+', '-']) and len(text.split()) > 1:
+            await update.message.reply_text(
+                "❌ Неверный формат для обычного режима!\n\n"
+                "🔹 Для <b>обычного режима</b>: введите только сумму\n"
+                "   Например: <code>1000</code> или <code>10 000</code>\n\n"
+                "🔹 Для <b>быстрого ввода</b>: используйте <code>/test</code>\n"
+                "   Например: <code>- 500 продукты</code>",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Неверный формат числа!\n\n"
+                "Введите сумму в целых рублях:\n"
+                "• <code>1000</code>\n"
+                "• <code>10 000</code>\n"
+                "• <code>1000000</code>",
+                parse_mode='HTML'
+            )
         return WAITING_FOR_AMOUNT
     except Exception as e:
         logger.error(f"Неожиданная ошибка в amount_handler для пользователя {user_id}: {e}")
@@ -1396,6 +1444,12 @@ def main():
                 logger.error(f"Не удалось отправить сообщение об ошибке: {e}")
     
     application.add_error_handler(error_handler)
+    
+    # Настраиваем меню команд бота
+    async def post_init(application):
+        await setup_bot_commands(application)
+    
+    application.post_init = post_init
     
     # Настраиваем ежедневные напоминания
     job_queue = application.job_queue
