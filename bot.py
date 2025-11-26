@@ -15,6 +15,7 @@ import random
 from datetime import time
 from gsheets import GoogleSheetsManager
 from utils import load_env, format_number, parse_number
+from reminder_settings import get_morning_time, get_evening_time, set_morning_time, set_evening_time
 
 # Настройка логирования
 logging.basicConfig(
@@ -124,10 +125,199 @@ async def send_evening_reminder(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка в send_evening_reminder: {e}")
 
+
+async def restart_reminder_jobs(context: ContextTypes.DEFAULT_TYPE):
+    """Перезапускает задачи напоминаний с текущими настройками времени"""
+    job_queue = context.application.job_queue
+    
+    # Удаляем старые задачи
+    current_jobs = job_queue.jobs()
+    for job in current_jobs:
+        if job.name in ["morning_reminder", "evening_reminder"]:
+            job.schedule_removal()
+    
+    # Получаем настройки времени
+    morning_time_str = get_morning_time()
+    evening_time_str = get_evening_time()
+    
+    try:
+        # Парсим время утреннего напоминания
+        morning_hour, morning_minute = map(int, morning_time_str.split(':'))
+        morning_time_obj = time(hour=morning_hour, minute=morning_minute)
+        
+        # Парсим время вечернего напоминания  
+        evening_hour, evening_minute = map(int, evening_time_str.split(':'))
+        evening_time_obj = time(hour=evening_hour, minute=evening_minute)
+        
+        # Создаем новые задачи
+        job_queue.run_daily(
+            send_morning_reminder,
+            time=morning_time_obj,
+            name="morning_reminder"
+        )
+        
+        job_queue.run_daily(
+            send_evening_reminder,
+            time=evening_time_obj,
+            name="evening_reminder"
+        )
+        
+        logger.info(f"Напоминания перезапущены: утром {morning_time_str}, вечером {evening_time_str}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при перезапуске напоминаний: {e}")
+
+
+def parse_time_string(time_str: str) -> tuple:
+    """Парсит строку времени в формате ЧЧ:ММ"""
+    try:
+        parts = time_str.strip().split(':')
+        if len(parts) != 2:
+            raise ValueError("Неверный формат времени")
+        
+        hour = int(parts[0])
+        minute = int(parts[1])
+        
+        if not (0 <= hour <= 23):
+            raise ValueError("Час должен быть от 0 до 23")
+        if not (0 <= minute <= 59):
+            raise ValueError("Минуты должны быть от 0 до 59")
+            
+        return hour, minute
+    except Exception:
+        raise ValueError("Неверный формат времени. Используйте ЧЧ:ММ")
+
+
+async def time_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ввода времени для напоминаний"""
+    user_id = update.effective_user.id
+    
+    # Проверяем права доступа
+    admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
+    admin_ids = [int(id.strip()) for id in admin_ids_str.split(",") if id.strip()]
+    
+    if user_id not in admin_ids:
+        await update.message.reply_text("❌ У вас нет прав для управления напоминаниями.")
+        return ConversationHandler.END
+    
+    reminder_type = context.user_data.get('setting_reminder_type')
+    if not reminder_type:
+        await update.message.reply_text("❌ Ошибка: тип напоминания не определен.")
+        return ConversationHandler.END
+    
+    time_str = update.message.text.strip()
+    
+    try:
+        # Парсим введенное время
+        hour, minute = parse_time_string(time_str)
+        formatted_time = f"{hour:02d}:{minute:02d}"
+        
+        # Сохраняем настройки
+        if reminder_type == 'morning':
+            set_morning_time(formatted_time)
+            reminder_name = "утреннего"
+            emoji = "🌅"
+        else:
+            set_evening_time(formatted_time)
+            reminder_name = "вечернего"
+            emoji = "🌙"
+        
+        # Перезапускаем задачи с новым временем
+        await restart_reminder_jobs(context)
+        
+        # Очищаем данные пользователя
+        context.user_data.clear()
+        
+        # Отправляем подтверждение
+        keyboard = [[InlineKeyboardButton("📅 Вернуться к настройкам", callback_data="back_to_reminders")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ {emoji} Время {reminder_name} напоминания изменено на <b>{formatted_time}</b>\n\n"
+            f"Напоминания перезапущены с новыми настройками!",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        
+        return ConversationHandler.END
+        
+    except ValueError as e:
+        await update.message.reply_text(
+            f"❌ {str(e)}\n\n"
+            f"Введите время в формате <b>ЧЧ:ММ</b>\n"
+            f"Например: <code>08:30</code> или <code>22:15</code>",
+            parse_mode='HTML'
+        )
+        # Остаемся в том же состоянии для повторного ввода
+        if reminder_type == 'morning':
+            return WAITING_FOR_MORNING_TIME
+        else:
+            return WAITING_FOR_EVENING_TIME
+
+
+async def back_to_reminders_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к меню настроек напоминаний"""
+    query = update.callback_query
+    await safe_answer_callback_query(query)
+    
+    user_id = update.effective_user.id
+    
+    # Проверяем права доступа (только админы)
+    admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
+    admin_ids = [int(id.strip()) for id in admin_ids_str.split(",") if id.strip()]
+    
+    if user_id not in admin_ids:
+        await query.edit_message_text("❌ У вас нет прав для управления напоминаниями.")
+        return
+    
+    # Получаем текущие настройки времени
+    morning_time = get_morning_time()
+    evening_time = get_evening_time()
+    
+    # Получаем информацию о текущих задачах
+    job_queue = context.application.job_queue
+    morning_jobs = job_queue.get_jobs_by_name("morning_reminder")
+    evening_jobs = job_queue.get_jobs_by_name("evening_reminder")
+    
+    status_text = "📅 <b>Управление напоминаниями:</b>\n\n"
+    
+    if morning_jobs:
+        status_text += f"🌅 Утреннее напоминание: ✅ Активно ({morning_time})\n"
+    else:
+        status_text += f"🌅 Утреннее напоминание: ❌ Отключено ({morning_time})\n"
+        
+    if evening_jobs:
+        status_text += f"🌙 Вечернее напоминание: ✅ Активно ({evening_time})\n"
+    else:
+        status_text += f"🌙 Вечернее напоминание: ❌ Отключено ({evening_time})\n"
+    
+    status_text += "\n<b>Напоминания отправляются всем пользователям из ADMIN_USER_IDS</b>"
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("⏰ Время утреннего", callback_data="set_morning_time"),
+            InlineKeyboardButton("🌙 Время вечернего", callback_data="set_evening_time")
+        ],
+        [InlineKeyboardButton("🔄 Перезапустить напоминания", callback_data="restart_reminders")],
+        [
+            InlineKeyboardButton("🧪 Тест утреннего", callback_data="test_morning"),
+            InlineKeyboardButton("🧪 Тест вечернего", callback_data="test_evening")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        status_text,
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
 # Состояния для ConversationHandler
 WAITING_FOR_AMOUNT, WAITING_FOR_CATEGORY, WAITING_FOR_DESCRIPTION, CONFIRMING = range(4)
 # Состояния для команды /test
 WAITING_FOR_TEST_TYPE, WAITING_FOR_TEST_INPUT = range(4, 6)
+# Состояния для настройки напоминаний
+WAITING_FOR_MORNING_TIME, WAITING_FOR_EVENING_TIME = range(6, 8)
 
 # Глобальные переменные
 sheets_manager: GoogleSheetsManager = None
@@ -252,29 +442,39 @@ async def reminders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Получаем текущие настройки времени
+    morning_time = get_morning_time()
+    evening_time = get_evening_time()
+    
     # Получаем информацию о текущих задачах
     job_queue = context.application.job_queue
     morning_jobs = job_queue.get_jobs_by_name("morning_reminder")
     evening_jobs = job_queue.get_jobs_by_name("evening_reminder")
     
-    status_text = "📅 <b>Статус напоминаний:</b>\n\n"
+    status_text = "📅 <b>Управление напоминаниями:</b>\n\n"
     
     if morning_jobs:
-        status_text += "🌅 Утреннее напоминание: ✅ Активно (8:00)\n"
+        status_text += f"🌅 Утреннее напоминание: ✅ Активно ({morning_time})\n"
     else:
-        status_text += "🌅 Утреннее напоминание: ❌ Отключено\n"
+        status_text += f"🌅 Утреннее напоминание: ❌ Отключено ({morning_time})\n"
         
     if evening_jobs:
-        status_text += "🌙 Вечернее напоминание: ✅ Активно (22:20)\n"
+        status_text += f"🌙 Вечернее напоминание: ✅ Активно ({evening_time})\n"
     else:
-        status_text += "🌙 Вечернее напоминание: ❌ Отключено\n"
+        status_text += f"🌙 Вечернее напоминание: ❌ Отключено ({evening_time})\n"
     
     status_text += "\n<b>Напоминания отправляются всем пользователям из ADMIN_USER_IDS</b>"
     
     keyboard = [
+        [
+            InlineKeyboardButton("⏰ Время утреннего", callback_data="set_morning_time"),
+            InlineKeyboardButton("🌙 Время вечернего", callback_data="set_evening_time")
+        ],
         [InlineKeyboardButton("🔄 Перезапустить напоминания", callback_data="restart_reminders")],
-        [InlineKeyboardButton("🧪 Тест утреннего", callback_data="test_morning")],
-        [InlineKeyboardButton("🧪 Тест вечернего", callback_data="test_evening")]
+        [
+            InlineKeyboardButton("🧪 Тест утреннего", callback_data="test_morning"),
+            InlineKeyboardButton("🧪 Тест вечернего", callback_data="test_evening")
+        ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -300,30 +500,36 @@ async def reminders_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ У вас нет прав для управления напоминаниями.")
         return
     
-    if query.data == "restart_reminders":
-        # Перезапускаем напоминания
-        job_queue = context.application.job_queue
-        
-        # Удаляем старые задачи
-        current_jobs = job_queue.jobs()
-        for job in current_jobs:
-            if job.name in ["morning_reminder", "evening_reminder"]:
-                job.schedule_removal()
-        
-        # Создаем новые
-        job_queue.run_daily(
-            send_morning_reminder,
-            time=time(hour=8, minute=0),
-            name="morning_reminder"
+    if query.data == "set_morning_time":
+        # Настройка времени утреннего напоминания
+        current_time = get_morning_time()
+        await query.edit_message_text(
+            f"⏰ <b>Настройка утреннего напоминания</b>\n\n"
+            f"Текущее время: <code>{current_time}</code>\n\n"
+            f"Введите новое время в формате <b>ЧЧ:ММ</b>\n"
+            f"Например: <code>07:30</code> или <code>09:15</code>",
+            parse_mode='HTML'
         )
+        context.user_data['setting_reminder_type'] = 'morning'
+        return WAITING_FOR_MORNING_TIME
         
-        job_queue.run_daily(
-            send_evening_reminder,
-            time=time(hour=22, minute=20), 
-            name="evening_reminder"
+    elif query.data == "set_evening_time":
+        # Настройка времени вечернего напоминания
+        current_time = get_evening_time()
+        await query.edit_message_text(
+            f"🌙 <b>Настройка вечернего напоминания</b>\n\n"
+            f"Текущее время: <code>{current_time}</code>\n\n"
+            f"Введите новое время в формате <b>ЧЧ:ММ</b>\n"
+            f"Например: <code>21:00</code> или <code>23:30</code>",
+            parse_mode='HTML'
         )
+        context.user_data['setting_reminder_type'] = 'evening'
+        return WAITING_FOR_EVENING_TIME
         
-        await query.edit_message_text("✅ Напоминания перезапущены!")
+    elif query.data == "restart_reminders":
+        # Перезапускаем напоминания с текущими настройками времени
+        await restart_reminder_jobs(context)
+        await query.edit_message_text("✅ Напоминания перезапущены с текущими настройками времени!")
         
     elif query.data == "test_morning":
         # Тестируем утреннее напоминание
@@ -1141,8 +1347,29 @@ def main():
     application.add_handler(CommandHandler("reminders", reminders_command))
     application.add_handler(CommandHandler("restart", restart_command))
     
-    # Обработчик кнопок управления напоминаниями
+    # ConversationHandler для настройки времени напоминаний
+    reminders_conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(reminders_callback, pattern="^(set_morning_time|set_evening_time)$")
+        ],
+        states={
+            WAITING_FOR_MORNING_TIME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, time_input_handler)
+            ],
+            WAITING_FOR_EVENING_TIME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, time_input_handler)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("reminders", reminders_command)
+        ]
+    )
+    
+    # Обработчики кнопок управления напоминаниями
+    application.add_handler(reminders_conv_handler)
     application.add_handler(CallbackQueryHandler(reminders_callback, pattern="^(restart_reminders|test_morning|test_evening)$"))
+    application.add_handler(CallbackQueryHandler(back_to_reminders_callback, pattern="^back_to_reminders$"))
     # ConversationHandler для команды /test (должен быть ПЕРЕД основным)
     application.add_handler(test_conv_handler)
     # ConversationHandler для основного потока ввода данных
@@ -1173,21 +1400,47 @@ def main():
     # Настраиваем ежедневные напоминания
     job_queue = application.job_queue
     
-    # Утреннее напоминание в 8:00
-    job_queue.run_daily(
-        send_morning_reminder,
-        time=time(hour=8, minute=0),
-        name="morning_reminder"
-    )
-    logger.info("Настроено утреннее напоминание на 8:00")
+    # Получаем настройки времени
+    morning_time_str = get_morning_time()
+    evening_time_str = get_evening_time()
     
-    # Вечернее напоминание в 22:20
-    job_queue.run_daily(
-        send_evening_reminder, 
-        time=time(hour=22, minute=20),
-        name="evening_reminder"
-    )
-    logger.info("Настроено вечернее напоминание на 22:20")
+    try:
+        # Парсим время утреннего напоминания
+        morning_hour, morning_minute = map(int, morning_time_str.split(':'))
+        morning_time_obj = time(hour=morning_hour, minute=morning_minute)
+        
+        job_queue.run_daily(
+            send_morning_reminder,
+            time=morning_time_obj,
+            name="morning_reminder"
+        )
+        logger.info(f"Настроено утреннее напоминание на {morning_time_str}")
+        
+        # Парсим время вечернего напоминания
+        evening_hour, evening_minute = map(int, evening_time_str.split(':'))
+        evening_time_obj = time(hour=evening_hour, minute=evening_minute)
+        
+        job_queue.run_daily(
+            send_evening_reminder, 
+            time=evening_time_obj,
+            name="evening_reminder"
+        )
+        logger.info(f"Настроено вечернее напоминание на {evening_time_str}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка настройки напоминаний: {e}")
+        # Используем время по умолчанию при ошибке
+        job_queue.run_daily(
+            send_morning_reminder,
+            time=time(hour=8, minute=0),
+            name="morning_reminder"
+        )
+        job_queue.run_daily(
+            send_evening_reminder, 
+            time=time(hour=22, minute=20),
+            name="evening_reminder"
+        )
+        logger.info("Использованы настройки времени по умолчанию")
     
     # Запускаем бота
     logger.info("Бот запущен")

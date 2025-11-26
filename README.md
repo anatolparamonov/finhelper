@@ -53,6 +53,10 @@ GOOGLE_SHEET_NAME=Sheet1
 GOOGLE_SHEET_URL=https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
 CREDENTIALS_PATH=credentials.json
 ADMIN_USER_IDS=123456789,987654321
+
+# Время напоминаний (формат ЧЧ:ММ)
+MORNING_REMINDER_TIME=08:00
+EVENING_REMINDER_TIME=22:20
 ```
 
    **ADMIN_USER_IDS** - список ID пользователей Telegram, которые могут использовать команду `/restart` для перезапуска бота. ID разделяются запятыми. Чтобы узнать свой ID, напишите боту [@userinfobot](https://t.me/userinfobot).
