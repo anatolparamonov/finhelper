@@ -1,11 +1,39 @@
 """Модуль для работы с Google Sheets"""
 import os
 import re
+import time
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from typing import List, Optional
 from utils import format_number
+
+
+def retry_on_error(max_retries=3, delay=1):
+    """Декоратор для повторных попыток при ошибках API"""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        logger.error(f"Все попытки исчерпаны для {func.__name__}: {e}")
+                        raise
+                    
+                    logger.warning(f"Попытка {attempt + 1} не удалась для {func.__name__}: {e}")
+                    if "500" in str(e) or "Internal error" in str(e):
+                        wait_time = delay * (2 ** attempt)  # Экспоненциальная задержка
+                        logger.info(f"Ждем {wait_time} секунд перед повторной попыткой...")
+                        time.sleep(wait_time)
+                    else:
+                        raise  # Не повторяем для других типов ошибок
+            return None
+        return wrapper
+    return decorator
 
 
 class GoogleSheetsManager:
@@ -28,18 +56,47 @@ class GoogleSheetsManager:
         self._categories_cache = {}  # Кэш категорий для ускорения работы
         self._connect()
     
+    @retry_on_error(max_retries=3, delay=2)
     def _connect(self):
         """Подключение к Google Sheets"""
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = Credentials.from_service_account_file(
-            self.credentials_path,
-            scopes=scope
-        )
-        self.client = gspread.authorize(creds)
-        self.sheet = self.client.open_by_key(self.sheet_id).worksheet(self.sheet_name)
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            logger.info(f"Начало подключения к Google Sheets")
+            logger.info(f"Путь к credentials: {self.credentials_path}")
+            logger.info(f"Sheet ID: {self.sheet_id}")
+            logger.info(f"Sheet name: {self.sheet_name}")
+            
+            # Проверяем существование файла credentials
+            if not os.path.exists(self.credentials_path):
+                raise FileNotFoundError(f"Файл credentials не найден: {self.credentials_path}")
+            
+            scope = [
+                "https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/drive"
+            ]
+            logger.info("Загружаем credentials...")
+            creds = Credentials.from_service_account_file(
+                self.credentials_path,
+                scopes=scope
+            )
+            
+            logger.info("Авторизуемся в gspread...")
+            self.client = gspread.authorize(creds)
+            
+            logger.info("Открываем таблицу по ID...")
+            spreadsheet = self.client.open_by_key(self.sheet_id)
+            logger.info(f"Таблица открыта: {spreadsheet.title}")
+            
+            logger.info(f"Получаем лист: {self.sheet_name}")
+            self.sheet = spreadsheet.worksheet(self.sheet_name)
+            logger.info(f"Лист получен: {self.sheet.title}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка подключения к Google Sheets: {e}")
+            logger.error(f"Тип ошибки: {type(e).__name__}")
+            raise
     
     def get_categories(self, category_type: str, use_cache: bool = True) -> List[str]:
         """

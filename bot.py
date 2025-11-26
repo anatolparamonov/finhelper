@@ -11,6 +11,8 @@ from telegram.ext import (
     filters,
     ContextTypes
 )
+import random
+from datetime import time
 from gsheets import GoogleSheetsManager
 from utils import load_env, format_number, parse_number
 
@@ -29,6 +31,98 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 # Отключаем предупреждения PTBUserWarning
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
+
+async def safe_answer_callback_query(query):
+    """Безопасный ответ на callback запрос с обработкой ошибок"""
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.warning(f"Не удалось ответить на callback запрос: {e}")
+        # Игнорируем ошибку, так как это не критично для работы бота
+
+
+# Фразы для утренних напоминаний
+MORNING_PHRASES = [
+    "Доброе утро! ☀️ Запишем расходы?",
+    "Привет! 🌅 Готовы вести учет финансов?", 
+    "С добрым утром! 💰 Начнем записывать траты?",
+    "Утро доброе! 📝 Время фиксировать расходы!",
+    "Привет! ☕ Запишем что потратили?",
+    "Доброе утро! 🌞 Ведем учет трат сегодня?",
+    "С утром! 💸 Начинаем записывать расходы?",
+    "Привет! 🌄 Готовы к учету финансов?"
+]
+
+# Фразы для вечерних напоминаний  
+EVENING_PHRASES = [
+    "Добрый вечер! 🌙 Запишем сколько за сегодня потратили?",
+    "Вечер добрый! 🌆 Подведем итоги дня по тратам?",
+    "Привет! 🌃 Время записать расходы за день!",
+    "Добрый вечер! ✨ Зафиксируем траты за сегодня?",
+    "Вечерочек! 🌇 Запишем что потратили сегодня?",
+    "Привет! 🌉 Подсчитаем расходы за день?",
+    "Добрый вечер! 🌠 Время учета трат за сегодня!",
+    "Вечер! 🌌 Запишем дневные расходы?"
+]
+
+
+async def send_morning_reminder(context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет утреннее напоминание"""
+    try:
+        # Получаем случайную фразу
+        phrase = random.choice(MORNING_PHRASES)
+        
+        # Получаем список всех пользователей (можно расширить логику)
+        # Пока отправляем админу, но можно добавить базу пользователей
+        admin_ids = os.getenv("ADMIN_USER_IDS", "").split(",")
+        
+        for admin_id in admin_ids:
+            if admin_id.strip():
+                try:
+                    user_id = int(admin_id.strip())
+                    keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=phrase,
+                        reply_markup=reply_markup
+                    )
+                    logger.info(f"Утреннее напоминание отправлено пользователю {user_id}")
+                except Exception as e:
+                    logger.error(f"Ошибка отправки утреннего напоминания пользователю {admin_id}: {e}")
+                    
+    except Exception as e:
+        logger.error(f"Ошибка в send_morning_reminder: {e}")
+
+
+async def send_evening_reminder(context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет вечернее напоминание"""
+    try:
+        # Получаем случайную фразу
+        phrase = random.choice(EVENING_PHRASES)
+        
+        # Получаем список всех пользователей
+        admin_ids = os.getenv("ADMIN_USER_IDS", "").split(",")
+        
+        for admin_id in admin_ids:
+            if admin_id.strip():
+                try:
+                    user_id = int(admin_id.strip())
+                    keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=phrase,
+                        reply_markup=reply_markup
+                    )
+                    logger.info(f"Вечернее напоминание отправлено пользователю {user_id}")
+                except Exception as e:
+                    logger.error(f"Ошибка отправки вечернего напоминания пользователю {admin_id}: {e}")
+                    
+    except Exception as e:
+        logger.error(f"Ошибка в send_evening_reminder: {e}")
 
 # Состояния для ConversationHandler
 WAITING_FOR_AMOUNT, WAITING_FOR_CATEGORY, WAITING_FOR_DESCRIPTION, CONFIRMING = range(4)
@@ -439,7 +533,7 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def start_input_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатия кнопки СТАРТ"""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_callback_query(query)
     
     context.user_data.clear()
     context.user_data['is_plan'] = False
@@ -457,7 +551,7 @@ async def expense_income_callback(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     logger.info(f"expense_income_callback вызван для пользователя {user_id}, data: {query.data}")
     
-    await query.answer()
+    await safe_answer_callback_query(query)
     
     fact_type = "расход" if query.data == "expense" else "доход"
     context.user_data['fact_type'] = fact_type
@@ -485,26 +579,44 @@ async def expense_income_callback(update: Update, context: ContextTypes.DEFAULT_
             "Введите сумму в целых рублях (например: 10000 или 10 000):",
             parse_mode='HTML'
         )
+        logger.info(f"Переходим в состояние WAITING_FOR_AMOUNT для пользователя {user_id}")
         return WAITING_FOR_AMOUNT
 
 
 async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ввода суммы"""
+    user_id = update.effective_user.id
+    logger.info(f"🔥 amount_handler ВЫЗВАН для пользователя {user_id}, текст: '{update.message.text}'")
+    
     try:
         amount = parse_number(update.message.text)
+        logger.info(f"Распарсенная сумма: {amount}")
+        
         if amount <= 0:
+            logger.warning(f"Пользователь {user_id} ввел неположительную сумму: {amount}")
             await update.message.reply_text(
                 "Сумма должна быть положительным числом. Попробуйте еще раз:"
             )
             return WAITING_FOR_AMOUNT
         
         context.user_data['amount'] = amount
+        logger.info(f"Сумма {amount} сохранена для пользователя {user_id}")
         
         # Получаем категории
-        category_type = "Расходы" if context.user_data['fact_type'] == "расход" else "Доходы"
+        fact_type = context.user_data.get('fact_type')
+        logger.info(f"fact_type для пользователя {user_id}: {fact_type}")
+        
+        category_type = "Расходы" if fact_type == "расход" else "Доходы"
+        logger.info(f"Запрашиваем категории типа: {category_type}")
+        
         categories = sheets_manager.get_categories(category_type)
+        logger.info(f"Получено категорий: {len(categories) if categories else 0}")
+        
+        if categories:
+            logger.info(f"Категории: {categories}")
         
         if not categories:
+            logger.error(f"Категории для {category_type} не найдены!")
             await update.message.reply_text(
                 f"Категории для {category_type.lower()} не найдены в таблице. "
                 "Обратитесь к администратору."
@@ -514,17 +626,28 @@ async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['categories'] = categories
         context.user_data['category_type'] = category_type
         
-        keyboard = get_category_keyboard(categories, context.user_data['fact_type'])
+        logger.info(f"Создаем клавиатуру с категориями для пользователя {user_id}")
+        keyboard = get_category_keyboard(categories, fact_type)
+        
         await update.message.reply_text(
             f"Сумма: <b>{format_number(amount)} руб.</b>\n\n"
             "Выберите категорию:",
             parse_mode='HTML',
             reply_markup=keyboard
         )
+        logger.info(f"Сообщение с категориями отправлено пользователю {user_id}")
         return WAITING_FOR_CATEGORY
-    except ValueError:
+        
+    except ValueError as e:
+        logger.error(f"Ошибка парсинга суммы для пользователя {user_id}: {e}")
         await update.message.reply_text(
             "Неверный формат числа. Введите сумму в целых рублях (например: 10000):"
+        )
+        return WAITING_FOR_AMOUNT
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка в amount_handler для пользователя {user_id}: {e}")
+        await update.message.reply_text(
+            "Произошла ошибка. Попробуйте еще раз или обратитесь к администратору."
         )
         return WAITING_FOR_AMOUNT
 
@@ -532,7 +655,7 @@ async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора категории"""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_callback_query(query)
     
     # Извлекаем индекс категории из callback_data: cat_{exp/inc}_{index}
     parts = query.data.split('_')
@@ -568,7 +691,7 @@ async def description_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.callback_query and update.callback_query.data == "skip_description":
         # Пропуск описания по кнопке
         query = update.callback_query
-        await query.answer()
+        await safe_answer_callback_query(query)
         description = ""
         message_to_edit = query
     else:
@@ -619,7 +742,7 @@ async def description_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик подтверждения"""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_callback_query(query)
     
     fact_type = context.user_data.get('fact_type')
     amount = context.user_data.get('amount')
@@ -671,7 +794,7 @@ async def confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик отмены"""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_callback_query(query)
     
     context.user_data.clear()
     context.user_data['is_plan'] = False
@@ -687,7 +810,7 @@ async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def continue_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик продолжения ввода плана"""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_callback_query(query)
     
     # Очищаем данные, но сохраняем режим плана
     context.user_data.clear()
@@ -704,7 +827,7 @@ async def continue_plan_callback(update: Update, context: ContextTypes.DEFAULT_T
 async def back_to_fact_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик возврата к факту"""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_callback_query(query)
     
     context.user_data.clear()
     context.user_data['is_plan'] = False
@@ -798,6 +921,11 @@ def main():
     
     # Получаем настройки Google Sheets
     credentials_path = os.getenv("CREDENTIALS_PATH", "credentials.json")
+    # Если путь относительный, делаем его абсолютным относительно папки скрипта
+    if not os.path.isabs(credentials_path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        credentials_path = os.path.join(script_dir, credentials_path)
+    
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
     sheet_name = os.getenv("GOOGLE_SHEET_NAME", "Sheet1")
     sheet_url = os.getenv("GOOGLE_SHEET_URL", "")
@@ -854,7 +982,7 @@ def main():
     async def test_continue_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик кнопки 'Продолжить ввод' после /test"""
         query = update.callback_query
-        await query.answer()
+        await safe_answer_callback_query(query)
         
         context.user_data['test_mode'] = True
         await query.edit_message_text(
@@ -868,7 +996,7 @@ def main():
     async def test_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик кнопки 'В начало' после /test"""
         query = update.callback_query
-        await query.answer()
+        await safe_answer_callback_query(query)
         
         context.user_data.clear()
         keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
@@ -909,10 +1037,10 @@ def main():
     application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("plan", plan_command))
     application.add_handler(CommandHandler("restart", restart_command))
+    # ConversationHandler для команды /test (должен быть ПЕРЕД основным)
+    application.add_handler(test_conv_handler)
     # ConversationHandler для основного потока ввода данных
     application.add_handler(conv_handler)
-    # ConversationHandler для команды /test
-    application.add_handler(test_conv_handler)
     
     # Добавляем обработчик ошибок
     async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -935,6 +1063,25 @@ def main():
                 logger.error(f"Не удалось отправить сообщение об ошибке: {e}")
     
     application.add_error_handler(error_handler)
+    
+    # Настраиваем ежедневные напоминания
+    job_queue = application.job_queue
+    
+    # Утреннее напоминание в 8:00
+    job_queue.run_daily(
+        send_morning_reminder,
+        time=time(hour=8, minute=0),
+        name="morning_reminder"
+    )
+    logger.info("Настроено утреннее напоминание на 8:00")
+    
+    # Вечернее напоминание в 22:20
+    job_queue.run_daily(
+        send_evening_reminder, 
+        time=time(hour=22, minute=20),
+        name="evening_reminder"
+    )
+    logger.info("Настроено вечернее напоминание на 22:20")
     
     # Запускаем бота
     logger.info("Бот запущен")
