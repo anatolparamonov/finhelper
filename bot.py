@@ -121,13 +121,23 @@ EVENING_PHRASES = [
 async def send_morning_reminder(context: ContextTypes.DEFAULT_TYPE):
     """Отправляет утреннее напоминание"""
     try:
+        from datetime import datetime
+        current_time = datetime.now()
+        logger.info(f"🔥 send_morning_reminder ВЫЗВАН в {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
         # Получаем случайную фразу
         phrase = random.choice(MORNING_PHRASES)
         
         # Получаем список всех пользователей (можно расширить логику)
         # Пока отправляем админу, но можно добавить базу пользователей
         admin_ids = os.getenv("ADMIN_USER_IDS", "").split(",")
+        logger.info(f"Список админов для отправки: {admin_ids}")
         
+        if not admin_ids or not any(admin_id.strip() for admin_id in admin_ids):
+            logger.warning("ADMIN_USER_IDS не настроен или пуст! Напоминание не будет отправлено.")
+            return
+        
+        sent_count = 0
         for admin_id in admin_ids:
             if admin_id.strip():
                 try:
@@ -140,23 +150,36 @@ async def send_morning_reminder(context: ContextTypes.DEFAULT_TYPE):
                         text=phrase,
                         reply_markup=reply_markup
                     )
-                    logger.info(f"Утреннее напоминание отправлено пользователю {user_id}")
+                    logger.info(f"✅ Утреннее напоминание отправлено пользователю {user_id}")
+                    sent_count += 1
                 except Exception as e:
-                    logger.error(f"Ошибка отправки утреннего напоминания пользователю {admin_id}: {e}")
+                    logger.error(f"❌ Ошибка отправки утреннего напоминания пользователю {admin_id}: {e}")
+        
+        logger.info(f"Утреннее напоминание: отправлено {sent_count} из {len([a for a in admin_ids if a.strip()])} админов")
                     
     except Exception as e:
-        logger.error(f"Ошибка в send_morning_reminder: {e}")
+        logger.error(f"Ошибка в send_morning_reminder: {e}", exc_info=True)
 
 
 async def send_evening_reminder(context: ContextTypes.DEFAULT_TYPE):
     """Отправляет вечернее напоминание"""
     try:
+        from datetime import datetime
+        current_time = datetime.now()
+        logger.info(f"🔥 send_evening_reminder ВЫЗВАН в {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
         # Получаем случайную фразу
         phrase = random.choice(EVENING_PHRASES)
         
         # Получаем список всех пользователей
         admin_ids = os.getenv("ADMIN_USER_IDS", "").split(",")
+        logger.info(f"Список админов для отправки: {admin_ids}")
         
+        if not admin_ids or not any(admin_id.strip() for admin_id in admin_ids):
+            logger.warning("ADMIN_USER_IDS не настроен или пуст! Напоминание не будет отправлено.")
+            return
+        
+        sent_count = 0
         for admin_id in admin_ids:
             if admin_id.strip():
                 try:
@@ -169,27 +192,41 @@ async def send_evening_reminder(context: ContextTypes.DEFAULT_TYPE):
                         text=phrase,
                         reply_markup=reply_markup
                     )
-                    logger.info(f"Вечернее напоминание отправлено пользователю {user_id}")
+                    logger.info(f"✅ Вечернее напоминание отправлено пользователю {user_id}")
+                    sent_count += 1
                 except Exception as e:
-                    logger.error(f"Ошибка отправки вечернего напоминания пользователю {admin_id}: {e}")
+                    logger.error(f"❌ Ошибка отправки вечернего напоминания пользователю {admin_id}: {e}")
+        
+        logger.info(f"Вечернее напоминание: отправлено {sent_count} из {len([a for a in admin_ids if a.strip()])} админов")
                     
     except Exception as e:
-        logger.error(f"Ошибка в send_evening_reminder: {e}")
+        logger.error(f"Ошибка в send_evening_reminder: {e}", exc_info=True)
 
 
 async def restart_reminder_jobs(context: ContextTypes.DEFAULT_TYPE):
     """Перезапускает задачи напоминаний с текущими настройками времени"""
     job_queue = context.application.job_queue
     
+    # Проверяем часовой пояс scheduler
+    scheduler_tz = None
+    if hasattr(job_queue, '_scheduler'):
+        scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
+        logger.info(f"Часовой пояс scheduler при перезапуске: {scheduler_tz}")
+    
     # Удаляем старые задачи
     current_jobs = job_queue.jobs()
+    removed_count = 0
     for job in current_jobs:
         if job.name in ["morning_reminder", "evening_reminder"]:
+            logger.info(f"Удаляем старое напоминание: {job.name}")
             job.schedule_removal()
+            removed_count += 1
+    logger.info(f"Удалено старых напоминаний: {removed_count}")
     
     # Получаем настройки времени
     morning_time_str = get_morning_time()
     evening_time_str = get_evening_time()
+    logger.info(f"Настройки времени напоминаний при перезапуске: утро={morning_time_str}, вечер={evening_time_str}")
     
     try:
         # Парсим время утреннего напоминания
@@ -201,19 +238,23 @@ async def restart_reminder_jobs(context: ContextTypes.DEFAULT_TYPE):
         evening_time_obj = time(hour=evening_hour, minute=evening_minute)
         
         # Создаем новые задачи
-        job_queue.run_daily(
+        morning_job = job_queue.run_daily(
             send_morning_reminder,
             time=morning_time_obj,
             name="morning_reminder"
         )
         
-        job_queue.run_daily(
+        evening_job = job_queue.run_daily(
             send_evening_reminder,
             time=evening_time_obj,
             name="evening_reminder"
         )
         
-        logger.info(f"Напоминания перезапущены: утром {morning_time_str}, вечером {evening_time_str}")
+        logger.info(f"✅ Напоминания перезапущены: утром {morning_time_str}, вечером {evening_time_str} (часовой пояс: {scheduler_tz if scheduler_tz else 'UTC'})")
+        if hasattr(morning_job, 'next_run_time'):
+            logger.info(f"   Следующий запуск утреннего: {morning_job.next_run_time}")
+        if hasattr(evening_job, 'next_run_time'):
+            logger.info(f"   Следующий запуск вечернего: {evening_job.next_run_time}")
         
     except Exception as e:
         logger.error(f"Ошибка при перезапуске напоминаний: {e}")
@@ -1752,32 +1793,42 @@ def main():
     # Настраиваем ежедневные напоминания
     job_queue = application.job_queue
     
+    # Проверяем часовой пояс scheduler
+    if hasattr(job_queue, '_scheduler'):
+        scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
+        logger.info(f"Часовой пояс scheduler: {scheduler_tz}")
+    
     # Получаем настройки времени
     morning_time_str = get_morning_time()
     evening_time_str = get_evening_time()
+    logger.info(f"Настройки времени напоминаний: утро={morning_time_str}, вечер={evening_time_str}")
     
     try:
         # Парсим время утреннего напоминания
         morning_hour, morning_minute = map(int, morning_time_str.split(':'))
         morning_time_obj = time(hour=morning_hour, minute=morning_minute)
         
-        job_queue.run_daily(
+        job = job_queue.run_daily(
             send_morning_reminder,
             time=morning_time_obj,
             name="morning_reminder"
         )
-        logger.info(f"Настроено утреннее напоминание на {morning_time_str}")
+        logger.info(f"✅ Настроено утреннее напоминание на {morning_time_str} (часовой пояс: {scheduler_tz if scheduler_tz else 'UTC'})")
+        if hasattr(job, 'next_run_time'):
+            logger.info(f"   Следующий запуск утреннего напоминания: {job.next_run_time}")
         
         # Парсим время вечернего напоминания
         evening_hour, evening_minute = map(int, evening_time_str.split(':'))
         evening_time_obj = time(hour=evening_hour, minute=evening_minute)
         
-        job_queue.run_daily(
+        job = job_queue.run_daily(
             send_evening_reminder, 
             time=evening_time_obj,
             name="evening_reminder"
         )
-        logger.info(f"Настроено вечернее напоминание на {evening_time_str}")
+        logger.info(f"✅ Настроено вечернее напоминание на {evening_time_str} (часовой пояс: {scheduler_tz if scheduler_tz else 'UTC'})")
+        if hasattr(job, 'next_run_time'):
+            logger.info(f"   Следующий запуск вечернего напоминания: {job.next_run_time}")
         
     except Exception as e:
         logger.error(f"Ошибка настройки напоминаний: {e}")
