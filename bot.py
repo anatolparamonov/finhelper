@@ -336,6 +336,8 @@ WAITING_FOR_AMOUNT, WAITING_FOR_CATEGORY, WAITING_FOR_DESCRIPTION, CONFIRMING = 
 WAITING_FOR_TEST_TYPE, WAITING_FOR_TEST_INPUT = range(4, 6)
 # Состояния для настройки напоминаний
 WAITING_FOR_MORNING_TIME, WAITING_FOR_EVENING_TIME = range(6, 8)
+# Состояние для быстрого ввода плана
+WAITING_FOR_PLAN_INPUT = 8
 
 # Глобальные переменные
 sheets_manager: GoogleSheetsManager = None
@@ -583,13 +585,27 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /plan"""
+    user_id = update.effective_user.id
+    logger.info(f"Команда /plan вызвана пользователем {user_id}")
+    
+    # Очищаем предыдущие данные, но сохраняем флаг is_plan
+    context.user_data.clear()
     context.user_data['is_plan'] = True
+    logger.info(f"Установлен is_plan=True для пользователя {user_id}")
+    
     await update.message.reply_text(
-        "Введите запланированные расходы или доходы.\n"
-        "Выберите тип:",
-        reply_markup=get_main_keyboard()
+        "📋 <b>Режим планирования</b>\n\n"
+        "Быстрый ввод запланированных данных.\n\n"
+        "Введите данные через пробел:\n"
+        "<b>+/- сумма категория [описание]</b>\n\n"
+        "Примеры:\n"
+        "<code>+ 1000 продукты магазин</code> - запланированный доход\n"
+        "<code>- 5000 транспорт</code> - запланированный расход\n"
+        "<code>+50000 зарплата</code> - запланированный доход (без пробела между знаком и суммой тоже можно)",
+        parse_mode='HTML'
     )
-    return WAITING_FOR_AMOUNT
+    logger.info(f"Отправлено сообщение с инструкциями для пользователя {user_id}")
+    return WAITING_FOR_PLAN_INPUT
 
 
 def find_closest_category(search_word: str, categories: list) -> str:
@@ -856,6 +872,220 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return WAITING_FOR_TEST_INPUT
 
 
+async def plan_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик быстрого ввода данных для /plan"""
+    user_id = update.effective_user.id
+    logger.info(f"plan_input_handler вызван для пользователя {user_id}")
+    
+    # Проверяем, что мы в правильном состоянии
+    if not context.user_data.get('is_plan', False):
+        logger.warning(f"plan_input_handler вызван, но is_plan не установлен для пользователя {user_id}")
+        try:
+            await update.message.reply_text(
+                "Ошибка: режим планирования не активен. Используйте /plan для начала."
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+        return ConversationHandler.END
+    
+    try:
+        text = update.message.text.strip()
+        logger.info(f"Получен текст от пользователя {user_id}: '{text}'")
+        parts = text.split()
+        logger.info(f"Разделено на части: {parts}")
+        
+        if len(parts) < 2:
+            await update.message.reply_text(
+                "Неверный формат. Введите: <b>+/- сумма категория [описание]</b>\n\n"
+                "Примеры:\n"
+                "<code>+ 1000 продукты магазин</code> - запланированный доход\n"
+                "<code>- 5000 транспорт</code> - запланированный расход",
+                parse_mode='HTML'
+            )
+            return WAITING_FOR_PLAN_INPUT
+        
+        # Парсим тип операции и сумму
+        symbol = None
+        amount_text = None
+        category_index = None
+        
+        first_token = parts[0]
+        if first_token in ("+", "-"):
+            symbol = first_token
+            if len(parts) < 3:
+                await update.message.reply_text(
+                    "Неверный формат. После знака укажите сумму и категорию.\n\n"
+                    "Пример: <code>+ 1000 продукты</code>",
+                    parse_mode='HTML'
+                )
+                return WAITING_FOR_PLAN_INPUT
+            amount_text = parts[1]
+            category_index = 2
+        else:
+            # Возможно, знак и сумма в одном токене (+1000)
+            if first_token.startswith("+") or first_token.startswith("-"):
+                symbol = first_token[0]
+                amount_text = first_token[1:]
+                category_index = 1
+                if not amount_text:
+                    await update.message.reply_text(
+                        "После знака необходимо указать число.\n\n"
+                        "Пример: <code>+1000 продукты</code>",
+                        parse_mode='HTML'
+                    )
+                    return WAITING_FOR_PLAN_INPUT
+            else:
+                await update.message.reply_text(
+                    "Первый символ должен быть <b>+</b> (доход) или <b>-</b> (расход).\n\n"
+                    "Пример: <code>+ 1000 продукты</code> или <code>-5000 транспорт</code>",
+                    parse_mode='HTML'
+                )
+                return WAITING_FOR_PLAN_INPUT
+        
+        fact_type = "доход" if symbol == "+" else "расход"
+        logger.info(f"Определен тип операции: {fact_type} (символ: {symbol})")
+        context.user_data['fact_type'] = fact_type
+        
+        # Парсим сумму
+        try:
+            logger.info(f"Парсинг суммы из '{amount_text}'")
+            amount = parse_number(amount_text)
+            logger.info(f"Распарсенная сумма: {amount}")
+            if amount <= 0:
+                raise ValueError("Сумма должна быть положительной")
+        except (ValueError, IndexError) as e:
+            logger.error(f"Ошибка парсинга суммы для пользователя {user_id}: {e}")
+            await update.message.reply_text(
+                "Неверный формат суммы. Введите число в целых рублях.\n"
+                "Пример: <code>+ 1000</code> или <code>-10 000</code>",
+                parse_mode='HTML'
+            )
+            return WAITING_FOR_PLAN_INPUT
+        
+        # Ищем категорию по следующему слову
+        try:
+            if len(parts) <= category_index:
+                await update.message.reply_text(
+                    "Укажите категорию после суммы.\n\n"
+                    "Пример: <code>+ 1000 продукты</code>",
+                    parse_mode='HTML'
+                )
+                return WAITING_FOR_PLAN_INPUT
+            
+            category_word = parts[category_index]
+            logger.info(f"Поиск категории по слову '{category_word}'")
+            category_type = "Расходы" if fact_type == "расход" else "Доходы"
+            logger.info(f"Тип операции: {fact_type}, тип категории: {category_type}")
+            categories = sheets_manager.get_categories(category_type)
+            logger.info(f"Получено категорий: {len(categories)} - {categories[:5]}")
+            
+            if not categories:
+                await update.message.reply_text(
+                    f"Категории для {category_type.lower()} не найдены в таблице."
+                )
+                return WAITING_FOR_PLAN_INPUT
+            
+            category = find_closest_category(category_word, categories)
+            logger.info(f"Найденная категория для '{category_word}': {category}")
+            
+            if not category:
+                logger.warning(f"Категория '{category_word}' не найдена для пользователя {user_id}. Доступные: {categories}")
+                category_list = ', '.join(categories[:10]) if len(categories) > 10 else ', '.join(categories)
+                await update.message.reply_text(
+                    f"❌ Категория '<b>{category_word}</b>' не найдена.\n\n"
+                    f"Доступные категории:\n{category_list}\n\n"
+                    f"Попробуйте ввести еще раз с правильной категорией.",
+                    parse_mode='HTML'
+                )
+                logger.info(f"Отправлено сообщение об ошибке пользователю {user_id}")
+                return WAITING_FOR_PLAN_INPUT
+        except Exception as e:
+            logger.error(f"Ошибка при поиске категории для пользователя {user_id}: {e}", exc_info=True)
+            await update.message.reply_text(
+                "Ошибка при поиске категории. Попробуйте еще раз."
+            )
+            return WAITING_FOR_PLAN_INPUT
+        
+        # Описание - все остальные слова (если есть) после категории
+        description_parts = parts[category_index + 1 :] if len(parts) > category_index + 1 else []
+        description = " ".join(description_parts)
+        
+        # Сохраняем данные
+        context.user_data['amount'] = amount
+        context.user_data['category'] = category
+        context.user_data['description'] = description
+        
+        # Записываем в таблицу
+        try:
+            username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
+            fact_type = context.user_data.get('fact_type', 'расход')
+            
+            logger.info(f"Начало записи данных через /plan для пользователя {user_id}: {fact_type}, {amount}, {category}, {description}, {username}, is_plan=True")
+            
+            success = sheets_manager.add_record(
+                fact_type=fact_type,
+                amount=amount,
+                category=category,
+                description=description,
+                username=username,
+                is_plan=True
+            )
+            
+            logger.info(f"Результат записи в таблицу для пользователя {user_id}: {success}")
+            
+            if success:
+                # Формируем сообщение с информацией о записи
+                fact_type_text = "📈 Доход" if fact_type == "доход" else "📉 Расход"
+                plan_text = "📋 <b>Запланировано</b>"
+                amount_text = format_number(amount)
+                category_text = category
+                description_text = description if description else "—"
+                
+                message = (
+                    f"✅ <b>Данные записаны в план!</b>\n\n"
+                    f"{plan_text}\n"
+                    f"{fact_type_text}: <b>{amount_text} руб.</b>\n"
+                    f"Категория: <b>{category_text}</b>\n"
+                    f"Описание: {description_text}"
+                )
+                
+                await update.message.reply_text(
+                    message,
+                    reply_markup=get_plan_continue_keyboard(),
+                    parse_mode='HTML'
+                )
+                logger.info(f"Сообщение отправлено пользователю {user_id}, возвращаем WAITING_FOR_PLAN_INPUT")
+                return WAITING_FOR_PLAN_INPUT
+            else:
+                await update.message.reply_text(
+                    "❌ Ошибка при сохранении данных в таблицу.\n"
+                    "Попробуйте еще раз."
+                )
+                return WAITING_FOR_PLAN_INPUT
+        except Exception as e:
+            logger.error(f"Ошибка при записи в таблицу для пользователя {user_id}: {e}", exc_info=True)
+            try:
+                await update.message.reply_text(
+                    f"❌ Произошла ошибка при записи данных: {str(e)}\n"
+                    "Попробуйте еще раз."
+                )
+            except Exception as send_error:
+                logger.error(f"Не удалось отправить сообщение об ошибке пользователю {user_id}: {send_error}")
+            return WAITING_FOR_PLAN_INPUT
+        
+    except Exception as e:
+        logger.error(f"Критическая ошибка в plan_input_handler для пользователя {user_id}: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(
+                "❌ Произошла ошибка. Попробуйте еще раз.\n"
+                "Формат: <b>+/- сумма категория [описание]</b>",
+                parse_mode='HTML'
+            )
+        except Exception as send_error:
+            logger.error(f"Не удалось отправить сообщение об ошибке пользователю {user_id}: {send_error}")
+        return WAITING_FOR_PLAN_INPUT
+
+
 async def start_input_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатия кнопки СТАРТ"""
     query = update.callback_query
@@ -881,7 +1111,10 @@ async def expense_income_callback(update: Update, context: ContextTypes.DEFAULT_
     
     fact_type = "расход" if query.data == "expense" else "доход"
     context.user_data['fact_type'] = fact_type
-    logger.info(f"Установлен fact_type: {fact_type} для пользователя {user_id}")
+    
+    # Проверяем режим плана
+    is_plan = context.user_data.get('is_plan', False)
+    logger.info(f"Установлен fact_type: {fact_type} для пользователя {user_id}, is_plan: {is_plan}")
     
     # Проверяем, находимся ли мы в режиме /test
     test_mode = context.user_data.get('test_mode', False)
@@ -899,13 +1132,14 @@ async def expense_income_callback(update: Update, context: ContextTypes.DEFAULT_
         )
         return WAITING_FOR_TEST_INPUT
     else:
-        # Обычный режим
+        # Обычный режим (факт или план)
+        mode_text = "📋 <b>Режим планирования</b>\n\n" if is_plan else ""
         await query.edit_message_text(
-            f"Вы выбрали: <b>{fact_type}</b>\n\n"
+            f"{mode_text}Вы выбрали: <b>{fact_type}</b>\n\n"
             "Введите сумму в целых рублях (например: 10000 или 10 000):",
             parse_mode='HTML'
         )
-        logger.info(f"Переходим в состояние WAITING_FOR_AMOUNT для пользователя {user_id}")
+        logger.info(f"Переходим в состояние WAITING_FOR_AMOUNT для пользователя {user_id}, is_plan: {is_plan}")
         return WAITING_FOR_AMOUNT
 
 
@@ -1172,12 +1406,23 @@ async def continue_plan_callback(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data.clear()
     context.user_data['is_plan'] = True
     
+    # Проверяем, откуда был вызван - из быстрого ввода или из обычного режима
+    # Если мы были в WAITING_FOR_PLAN_INPUT, продолжаем быстрый ввод
+    # Иначе переходим в обычный режим
+    
+    # Определяем по наличию callback_query - если есть, значит это из быстрого ввода
+    # (после сохранения данных показывается клавиатура с кнопками)
     await query.edit_message_text(
-        "Продолжаем ввод запланированных данных.\n"
-        "Выберите тип:",
-        reply_markup=get_main_keyboard()
+        "📋 <b>Продолжаем ввод запланированных данных</b>\n\n"
+        "Быстрый ввод:\n"
+        "Введите данные через пробел:\n"
+        "<b>+/- сумма категория [описание]</b>\n\n"
+        "Примеры:\n"
+        "<code>+ 1000 продукты магазин</code> - запланированный доход\n"
+        "<code>- 5000 транспорт</code> - запланированный расход",
+        parse_mode='HTML'
     )
-    return WAITING_FOR_AMOUNT
+    return WAITING_FOR_PLAN_INPUT
 
 
 async def back_to_fact_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1304,7 +1549,8 @@ def main():
     # Создаем ConversationHandler для основного потока ввода данных
     conv_handler = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(start_input_callback, pattern="^start_input$")
+            CallbackQueryHandler(start_input_callback, pattern="^start_input$"),
+            CommandHandler("plan", plan_command)  # Команда /plan как точка входа
         ],
         states={
             WAITING_FOR_AMOUNT: [
@@ -1323,6 +1569,11 @@ def main():
             CONFIRMING: [
                 CallbackQueryHandler(confirm_callback, pattern="^confirm$"),
                 CallbackQueryHandler(cancel_callback, pattern="^cancel$"),
+                CallbackQueryHandler(continue_plan_callback, pattern="^continue_plan$"),
+                CallbackQueryHandler(back_to_fact_callback, pattern="^back_to_fact$")
+            ],
+            WAITING_FOR_PLAN_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, plan_input_handler),
                 CallbackQueryHandler(continue_plan_callback, pattern="^continue_plan$"),
                 CallbackQueryHandler(back_to_fact_callback, pattern="^back_to_fact$")
             ]
@@ -1387,11 +1638,11 @@ def main():
     
     # Регистрируем обработчики
     # Команды /start, /help, /report, /plan, /restart должны работать вне ConversationHandler
-    # /plan также в fallbacks ConversationHandler для работы во время разговора
+    # Команда /plan теперь в entry_points ConversationHandler
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", report_command))
-    application.add_handler(CommandHandler("plan", plan_command))
+    # application.add_handler(CommandHandler("plan", plan_command))  # Убрано - теперь в entry_points ConversationHandler
     application.add_handler(CommandHandler("reminders", reminders_command))
     application.add_handler(CommandHandler("restart", restart_command))
     
