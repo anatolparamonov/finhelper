@@ -17,6 +17,19 @@ from gsheets import GoogleSheetsManager
 from utils import load_env, format_number, parse_number
 from reminder_settings import get_morning_time, get_evening_time, set_morning_time, set_evening_time
 
+# Импорт для работы с часовыми поясами
+try:
+    from zoneinfo import ZoneInfo
+    USE_ZONEINFO = True
+except ImportError:
+    # Для Python < 3.9 используем pytz
+    try:
+        import pytz
+        USE_ZONEINFO = False
+    except ImportError:
+        USE_ZONEINFO = None
+        pytz = None
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -32,6 +45,26 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 # Отключаем предупреждения PTBUserWarning
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
+
+def get_timezone():
+    """Получает часовой пояс из переменной окружения или использует локальный"""
+    timezone_str = os.getenv("TIMEZONE", "Europe/Moscow")  # По умолчанию Москва
+    
+    if USE_ZONEINFO:
+        try:
+            return ZoneInfo(timezone_str)
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить часовой пояс {timezone_str}: {e}. Используется UTC.")
+            return None
+    elif USE_ZONEINFO is False and pytz:
+        try:
+            return pytz.timezone(timezone_str)
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить часовой пояс {timezone_str}: {e}. Используется UTC.")
+            return None
+    else:
+        logger.warning("Библиотеки для работы с часовыми поясами не установлены. Используется UTC.")
+        return None
 
 async def setup_bot_commands(application):
     """Настройка меню команд бота"""
@@ -1542,8 +1575,22 @@ def main():
         logger.error(f"Ошибка подключения к Google Sheets: {e}")
         raise
     
+    # Получаем часовой пояс для job_queue
+    tz = get_timezone()
+    
     # Создаем приложение
     application = Application.builder().token(bot_token).build()
+    
+    # Настраиваем часовой пояс для job_queue (APScheduler)
+    if tz and hasattr(application.job_queue, '_scheduler'):
+        try:
+            application.job_queue._scheduler.timezone = tz
+            logger.info(f"Часовой пояс настроен для job_queue: {os.getenv('TIMEZONE', 'Europe/Moscow')}")
+        except Exception as e:
+            logger.warning(f"Не удалось настроить часовой пояс для job_queue: {e}")
+    elif not tz:
+        logger.warning("Часовой пояс не установлен, напоминания будут работать в UTC!")
+    
     application_instance = application  # Сохраняем для возможности перезапуска
     
     # Создаем ConversationHandler для основного потока ввода данных
