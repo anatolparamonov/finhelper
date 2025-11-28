@@ -9,7 +9,7 @@ def load_reminder_settings() -> Dict[str, Any]:
     """Загружает настройки напоминаний из файла"""
     default_settings = {
         "morning_time": "08:00",
-        "evening_time": "22:20"
+        "evening_time": "21:00"
     }
     
     try:
@@ -54,7 +54,7 @@ def get_evening_time() -> str:
         return env_time
     
     settings = load_reminder_settings()
-    return settings.get("evening_time", "22:20")
+    return settings.get("evening_time", "21:00")
 
 def set_morning_time(time_str: str) -> bool:
     """Устанавливает время утреннего напоминания"""

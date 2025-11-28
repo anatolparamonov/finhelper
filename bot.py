@@ -69,8 +69,7 @@ def get_timezone():
 async def setup_bot_commands(application):
     """Настройка меню команд бота"""
     commands = [
-        BotCommand("start", "🏠 Главное меню"),
-        BotCommand("test", "⚡ Быстрый ввод данных"),
+        BotCommand("start", "🏠 Быстрый ввод данных"),
         BotCommand("plan", "📋 Ввод планируемых расходов/доходов"),
         BotCommand("report", "📊 Ссылка на таблицу с данными"),
         BotCommand("reminders", "⏰ Настройка напоминаний"),
@@ -119,7 +118,7 @@ EVENING_PHRASES = [
 
 
 async def send_morning_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет утреннее напоминание"""
+    """Отправляет утреннее напоминание и сразу переходит к запросу данных"""
     try:
         from datetime import datetime
         current_time = datetime.now()
@@ -142,18 +141,38 @@ async def send_morning_reminder(context: ContextTypes.DEFAULT_TYPE):
             if admin_id.strip():
                 try:
                     user_id = int(admin_id.strip())
-                    keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
                     
+                    # Очищаем данные пользователя и устанавливаем состояние для быстрого ввода
+                    if user_id not in context.application.user_data:
+                        context.application.user_data[user_id] = {}
+                    context.application.user_data[user_id].clear()
+                    context.application.user_data[user_id]['is_plan'] = False
+                    
+                    # Отправляем напоминание с инструкциями для быстрого ввода
                     await context.bot.send_message(
                         chat_id=user_id,
-                        text=phrase,
-                        reply_markup=reply_markup
+                        text=(
+                            f"{phrase}\n\n"
+                            "⚡ <b>Быстрый ввод данных</b>\n\n"
+                            "Введите данные через пробел:\n"
+                            "<b>+/- сумма категория</b>\n\n"
+                            "Примеры:\n"
+                            "<code>+ 1000 продукты</code> - доход\n"
+                            "<code>- 5000 транспорт</code> - расход\n"
+                            "<code>+50000 зарплата</code> - доход (без пробела между знаком и суммой тоже можно)\n\n"
+                            "После ввода появится возможность добавить описание."
+                        ),
+                        parse_mode='HTML'
                     )
-                    logger.info(f"✅ Утреннее напоминание отправлено пользователю {user_id}")
+                    
+                    # Устанавливаем флаг, что пользователь может начать быстрый ввод
+                    # ConversationHandler установит состояние автоматически при первом сообщении
+                    context.application.user_data[user_id]['_ready_for_quick_input'] = True
+                    
+                    logger.info(f"✅ Утреннее напоминание отправлено пользователю {user_id}, готов к быстрому вводу")
                     sent_count += 1
                 except Exception as e:
-                    logger.error(f"❌ Ошибка отправки утреннего напоминания пользователю {admin_id}: {e}")
+                    logger.error(f"❌ Ошибка отправки утреннего напоминания пользователю {admin_id}: {e}", exc_info=True)
         
         logger.info(f"Утреннее напоминание: отправлено {sent_count} из {len([a for a in admin_ids if a.strip()])} админов")
                     
@@ -162,7 +181,7 @@ async def send_morning_reminder(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_evening_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет вечернее напоминание"""
+    """Отправляет вечернее напоминание и сразу переходит к запросу данных"""
     try:
         from datetime import datetime
         current_time = datetime.now()
@@ -184,18 +203,38 @@ async def send_evening_reminder(context: ContextTypes.DEFAULT_TYPE):
             if admin_id.strip():
                 try:
                     user_id = int(admin_id.strip())
-                    keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
                     
+                    # Очищаем данные пользователя и устанавливаем состояние для быстрого ввода
+                    if user_id not in context.application.user_data:
+                        context.application.user_data[user_id] = {}
+                    context.application.user_data[user_id].clear()
+                    context.application.user_data[user_id]['is_plan'] = False
+                    
+                    # Отправляем напоминание с инструкциями для быстрого ввода
                     await context.bot.send_message(
                         chat_id=user_id,
-                        text=phrase,
-                        reply_markup=reply_markup
+                        text=(
+                            f"{phrase}\n\n"
+                            "⚡ <b>Быстрый ввод данных</b>\n\n"
+                            "Введите данные через пробел:\n"
+                            "<b>+/- сумма категория</b>\n\n"
+                            "Примеры:\n"
+                            "<code>+ 1000 продукты</code> - доход\n"
+                            "<code>- 5000 транспорт</code> - расход\n"
+                            "<code>+50000 зарплата</code> - доход (без пробела между знаком и суммой тоже можно)\n\n"
+                            "После ввода появится возможность добавить описание."
+                        ),
+                        parse_mode='HTML'
                     )
-                    logger.info(f"✅ Вечернее напоминание отправлено пользователю {user_id}")
+                    
+                    # Устанавливаем флаг, что пользователь может начать быстрый ввод
+                    # ConversationHandler установит состояние автоматически при первом сообщении
+                    context.application.user_data[user_id]['_ready_for_quick_input'] = True
+                    
+                    logger.info(f"✅ Вечернее напоминание отправлено пользователю {user_id}, готов к быстрому вводу")
                     sent_count += 1
                 except Exception as e:
-                    logger.error(f"❌ Ошибка отправки вечернего напоминания пользователю {admin_id}: {e}")
+                    logger.error(f"❌ Ошибка отправки вечернего напоминания пользователю {admin_id}: {e}", exc_info=True)
         
         logger.info(f"Вечернее напоминание: отправлено {sent_count} из {len([a for a in admin_ids if a.strip()])} админов")
                     
@@ -406,16 +445,17 @@ async def back_to_reminders_callback(update: Update, context: ContextTypes.DEFAU
 
 # Состояния для ConversationHandler
 WAITING_FOR_AMOUNT, WAITING_FOR_CATEGORY, WAITING_FOR_DESCRIPTION, CONFIRMING = range(4)
-# Состояния для команды /test
-WAITING_FOR_TEST_TYPE, WAITING_FOR_TEST_INPUT = range(4, 6)
+# Состояния для быстрого ввода данных
+WAITING_FOR_TEST_TYPE, WAITING_FOR_TEST_INPUT, WAITING_FOR_QUICK_DESCRIPTION = range(4, 7)
 # Состояния для настройки напоминаний
-WAITING_FOR_MORNING_TIME, WAITING_FOR_EVENING_TIME = range(6, 8)
+WAITING_FOR_MORNING_TIME, WAITING_FOR_EVENING_TIME = range(7, 9)
 # Состояние для быстрого ввода плана
-WAITING_FOR_PLAN_INPUT = 8
+WAITING_FOR_PLAN_INPUT = 9
 
 # Глобальные переменные
 sheets_manager: GoogleSheetsManager = None
 sheet_url: str = None
+pending_timezone = None  # Часовой пояс для установки в scheduler
 
 
 def get_main_keyboard():
@@ -471,7 +511,7 @@ def get_skip_description_keyboard():
 
 
 def get_test_continue_keyboard():
-    """Клавиатура после ввода данных через /test"""
+    """Клавиатура после быстрого ввода данных"""
     keyboard = [
         [InlineKeyboardButton("Продолжить ввод", callback_data="test_continue")],
         [InlineKeyboardButton("В начало", callback_data="test_start")]
@@ -480,15 +520,49 @@ def get_test_continue_keyboard():
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
-    keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    """Обработчик команды /start - быстрый ввод данных"""
+    user_id = update.effective_user.id
+    logger.info(f"Команда /start от пользователя {user_id}")
+    
+    context.user_data.clear()
+    context.user_data['is_plan'] = False
+    
+    logger.info(f"Быстрый ввод активирован для пользователя {user_id}")
     
     await update.message.reply_text(
-        "Добро пожаловать в FinHelper!\n\n"
-        "Нажмите кнопку СТАРТ для начала работы.",
-        reply_markup=reply_markup
+        "👋 <b>Добро пожаловать в FinHelper!</b>\n\n"
+        "⚡ <b>Быстрый ввод данных</b>\n\n"
+        "Введите данные через пробел:\n"
+        "<b>+/- сумма категория</b>\n\n"
+        "Примеры:\n"
+        "<code>+ 1000 продукты</code> - доход\n"
+        "<code>- 5000 транспорт</code> - расход\n"
+        "<code>+50000 зарплата</code> - доход (без пробела между знаком и суммой тоже можно)\n\n"
+        "После ввода данных появится возможность добавить описание.\n\n"
+        "💡 <i>Используйте /help для справки по всем командам</i>",
+        parse_mode='HTML'
     )
+    return WAITING_FOR_TEST_INPUT
+
+
+async def quick_input_entry_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик для входа в быстрый ввод после напоминания"""
+    user_id = update.effective_user.id
+    logger.info(f"quick_input_entry_handler вызван для пользователя {user_id}")
+    
+    # Проверяем флаг готовности к быстрому вводу
+    if context.user_data.get('_ready_for_quick_input', False):
+        logger.info(f"Флаг _ready_for_quick_input установлен для пользователя {user_id}, переходим к быстрому вводу")
+        # Убираем флаг
+        context.user_data.pop('_ready_for_quick_input', None)
+        # Устанавливаем состояние для быстрого ввода
+        context.user_data['is_plan'] = False
+        # Обрабатываем сообщение как быстрый ввод
+        return await test_input_handler(update, context)
+    
+    # Если флаг не установлен, не обрабатываем - ConversationHandler не будет обрабатывать это сообщение
+    logger.info(f"Флаг _ready_for_quick_input не установлен для пользователя {user_id}, пропускаем")
+    return ConversationHandler.END
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -498,7 +572,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - Начать работу с ботом\n"
         "/report - Получить ссылку на таблицу\n"
         "/plan - Ввести запланированные расходы/доходы\n"
-        "/test - Быстрый ввод данных одной строкой\n"
         "/reminders - Управление напоминаниями\n"
         "/restart - Перезапустить бота (только для администраторов)\n"
         "/help - Показать эту справку\n\n"
@@ -509,7 +582,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "4. Выберите категорию\n"
         "5. Введите описание (или нажмите Enter для пропуска)\n"
         "6. Подтвердите или отмените запись\n\n"
-        "<b>Быстрый ввод (/test):</b>\n"
+        "<b>Быстрый ввод:</b>\n"
         "Введите: <code>+/- сумма категория [описание]</code>\n\n"
         "Примеры:\n"
         "<code>+ 1000 продукты магазин</code> - доход\n"
@@ -517,7 +590,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<code>+ 50000 зарплата</code> - доход\n\n"
         "<b>Напоминания:</b>\n"
         "🌅 Утром в 8:00 - напоминание записать расходы\n"
-        "🌙 Вечером в 22:20 - напоминание подвести итоги дня"
+        "🌙 Вечером в 21:00 - напоминание подвести итоги дня"
     )
     await update.message.reply_text(help_text, parse_mode='HTML')
 
@@ -671,11 +744,12 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📋 <b>Режим планирования</b>\n\n"
         "Быстрый ввод запланированных данных.\n\n"
         "Введите данные через пробел:\n"
-        "<b>+/- сумма категория [описание]</b>\n\n"
+        "<b>+/- сумма категория</b>\n\n"
         "Примеры:\n"
-        "<code>+ 1000 продукты магазин</code> - запланированный доход\n"
+        "<code>+ 1000 продукты</code> - запланированный доход\n"
         "<code>- 5000 транспорт</code> - запланированный расход\n"
-        "<code>+50000 зарплата</code> - запланированный доход (без пробела между знаком и суммой тоже можно)",
+        "<code>+50000 зарплата</code> - запланированный доход (без пробела между знаком и суммой тоже можно)\n\n"
+        "После ввода появится возможность добавить описание.",
         parse_mode='HTML'
     )
     logger.info(f"Отправлено сообщение с инструкциями для пользователя {user_id}")
@@ -733,20 +807,15 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик ввода данных для /test"""
+    """Обработчик быстрого ввода данных (для /start и быстрого ввода)"""
     user_id = update.effective_user.id
     logger.info(f"test_input_handler вызван для пользователя {user_id}")
     
-    # Проверяем, что мы в правильном состоянии
-    if not context.user_data.get('test_mode', False):
-        logger.warning(f"test_input_handler вызван, но test_mode не установлен для пользователя {user_id}")
-        try:
-            await update.message.reply_text(
-                "Ошибка: режим быстрого ввода не активен. Используйте /test для начала."
-            )
-        except Exception as e:
-            logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
-        return ConversationHandler.END
+    # Проверяем режим плана
+    is_plan = context.user_data.get('is_plan', False)
+    if is_plan:
+        # Если это режим плана, используем plan_input_handler
+        return await plan_input_handler(update, context)
     
     try:
         text = update.message.text.strip()
@@ -866,72 +935,20 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return WAITING_FOR_TEST_INPUT
         
-        # Описание - все остальные слова (если есть) после категории
-        description_parts = parts[category_index + 1 :] if len(parts) > category_index + 1 else []
-        description = " ".join(description_parts)
-        
-        # Сохраняем данные
+        # Сохраняем данные (без описания - оно будет запрошено отдельно)
         context.user_data['amount'] = amount
         context.user_data['category'] = category
-        context.user_data['description'] = description
         
-        # Записываем в таблицу
-        try:
-            username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
-            fact_type = context.user_data.get('fact_type', 'расход')
-            
-            logger.info(f"Начало записи данных через /test для пользователя {user_id}: {fact_type}, {amount}, {category}, {description}, {username}")
-            
-            success = sheets_manager.add_record(
-                fact_type=fact_type,
-                amount=amount,
-                category=category,
-                description=description,
-                username=username,
-                is_plan=False
-            )
-            
-            logger.info(f"Результат записи в таблицу для пользователя {user_id}: {success}")
-            
-            if success:
-                logger.info(f"Данные успешно записаны для пользователя {user_id}, отправка подтверждения")
-                try:
-                    await update.message.reply_text(
-                        f"✅ Данные успешно записаны в таблицу!\n\n"
-                        f"Тип: <b>{fact_type}</b>\n"
-                        f"Сумма: <b>{format_number(amount)} руб.</b>\n"
-                        f"Категория: <b>{category}</b>\n"
-                        f"{'Описание: ' + description if description else ''}\n\n"
-                        "Выберите следующее действие:",
-                        parse_mode='HTML',
-                        reply_markup=get_test_continue_keyboard()
-                    )
-                    logger.info(f"Подтверждение отправлено пользователю {user_id}")
-                except Exception as e:
-                    logger.error(f"Ошибка при отправке подтверждения пользователю {user_id}: {e}", exc_info=True)
-                
-                # Сохраняем test_mode для продолжения
-                test_mode = context.user_data.get('test_mode', False)
-                context.user_data.clear()
-                context.user_data['test_mode'] = test_mode
-                logger.info(f"test_mode сохранен для пользователя {user_id}: {test_mode}")
-                return WAITING_FOR_TEST_INPUT
-            else:
-                logger.error(f"Запись в таблицу не удалась для пользователя {user_id}")
-                await update.message.reply_text(
-                    "❌ Ошибка при записи данных. Попробуйте еще раз."
-                )
-                return WAITING_FOR_TEST_INPUT
-        except Exception as e:
-            logger.error(f"Ошибка при записи в таблицу для пользователя {user_id}: {e}", exc_info=True)
-            try:
-                await update.message.reply_text(
-                    f"❌ Произошла ошибка при записи данных: {str(e)}\n"
-                    "Попробуйте еще раз."
-                )
-            except Exception as send_error:
-                logger.error(f"Не удалось отправить сообщение об ошибке пользователю {user_id}: {send_error}")
-            return WAITING_FOR_TEST_INPUT
+        # Переходим к запросу описания
+        await update.message.reply_text(
+            f"✅ Принято:\n"
+            f"<b>{fact_type}</b>: {format_number(amount)} руб. | {category}\n\n"
+            "Введите описание или нажмите кнопку для пропуска:",
+            parse_mode='HTML',
+            reply_markup=get_skip_description_keyboard()
+        )
+        logger.info(f"Запрос описания для пользователя {user_id}")
+        return WAITING_FOR_QUICK_DESCRIPTION
         
     except Exception as e:
         logger.error(f"Критическая ошибка в test_input_handler для пользователя {user_id}: {e}", exc_info=True)
@@ -1080,72 +1097,20 @@ async def plan_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return WAITING_FOR_PLAN_INPUT
         
-        # Описание - все остальные слова (если есть) после категории
-        description_parts = parts[category_index + 1 :] if len(parts) > category_index + 1 else []
-        description = " ".join(description_parts)
-        
-        # Сохраняем данные
+        # Сохраняем данные (без описания - оно будет запрошено отдельно)
         context.user_data['amount'] = amount
         context.user_data['category'] = category
-        context.user_data['description'] = description
         
-        # Записываем в таблицу
-        try:
-            username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
-            fact_type = context.user_data.get('fact_type', 'расход')
-            
-            logger.info(f"Начало записи данных через /plan для пользователя {user_id}: {fact_type}, {amount}, {category}, {description}, {username}, is_plan=True")
-            
-            success = sheets_manager.add_record(
-                fact_type=fact_type,
-                amount=amount,
-                category=category,
-                description=description,
-                username=username,
-                is_plan=True
-            )
-            
-            logger.info(f"Результат записи в таблицу для пользователя {user_id}: {success}")
-            
-            if success:
-                # Формируем сообщение с информацией о записи
-                fact_type_text = "📈 Доход" if fact_type == "доход" else "📉 Расход"
-                plan_text = "📋 <b>Запланировано</b>"
-                amount_text = format_number(amount)
-                category_text = category
-                description_text = description if description else "—"
-                
-                message = (
-                    f"✅ <b>Данные записаны в план!</b>\n\n"
-                    f"{plan_text}\n"
-                    f"{fact_type_text}: <b>{amount_text} руб.</b>\n"
-                    f"Категория: <b>{category_text}</b>\n"
-                    f"Описание: {description_text}"
-                )
-                
-                await update.message.reply_text(
-                    message,
-                    reply_markup=get_plan_continue_keyboard(),
-                    parse_mode='HTML'
-                )
-                logger.info(f"Сообщение отправлено пользователю {user_id}, возвращаем WAITING_FOR_PLAN_INPUT")
-                return WAITING_FOR_PLAN_INPUT
-            else:
-                await update.message.reply_text(
-                    "❌ Ошибка при сохранении данных в таблицу.\n"
-                    "Попробуйте еще раз."
-                )
-                return WAITING_FOR_PLAN_INPUT
-        except Exception as e:
-            logger.error(f"Ошибка при записи в таблицу для пользователя {user_id}: {e}", exc_info=True)
-            try:
-                await update.message.reply_text(
-                    f"❌ Произошла ошибка при записи данных: {str(e)}\n"
-                    "Попробуйте еще раз."
-                )
-            except Exception as send_error:
-                logger.error(f"Не удалось отправить сообщение об ошибке пользователю {user_id}: {send_error}")
-            return WAITING_FOR_PLAN_INPUT
+        # Переходим к запросу описания
+        await update.message.reply_text(
+            f"✅ Принято (план):\n"
+            f"<b>{fact_type}</b>: {format_number(amount)} руб. | {category}\n\n"
+            "Введите описание или нажмите кнопку для пропуска:",
+            parse_mode='HTML',
+            reply_markup=get_skip_description_keyboard()
+        )
+        logger.info(f"Запрос описания для плана пользователя {user_id}")
+        return WAITING_FOR_QUICK_DESCRIPTION
         
     except Exception as e:
         logger.error(f"Критическая ошибка в plan_input_handler для пользователя {user_id}: {e}", exc_info=True)
@@ -1158,6 +1123,106 @@ async def plan_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception as send_error:
             logger.error(f"Не удалось отправить сообщение об ошибке пользователю {user_id}: {send_error}")
         return WAITING_FOR_PLAN_INPUT
+
+
+async def quick_description_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик быстрого ввода описания (для быстрого ввода данных)"""
+    user_id = update.effective_user.id
+    logger.info(f"quick_description_handler вызван для пользователя {user_id}")
+    
+    # Проверяем, пропущено ли описание по кнопке
+    if update.callback_query and update.callback_query.data == "skip_description":
+        query = update.callback_query
+        await safe_answer_callback_query(query)
+        description = ""
+    else:
+        # Ввод описания текстом
+        description = update.message.text.strip() if update.message else ""
+    
+    # Сохраняем описание
+    context.user_data['description'] = description if description else ""
+    
+    # Получаем данные для записи
+    fact_type = context.user_data.get('fact_type', 'расход')
+    amount = context.user_data.get('amount', 0)
+    category = context.user_data.get('category', '')
+    is_plan = context.user_data.get('is_plan', False)
+    username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
+    
+    # Записываем в таблицу
+    try:
+        logger.info(f"Начало записи данных через быстрый ввод для пользователя {user_id}: {fact_type}, {amount}, {category}, {description}, {username}, is_plan={is_plan}")
+        
+        success = sheets_manager.add_record(
+            fact_type=fact_type,
+            amount=amount,
+            category=category,
+            description=description,
+            username=username,
+            is_plan=is_plan
+        )
+        
+        logger.info(f"Результат записи в таблицу для пользователя {user_id}: {success}")
+        
+        if success:
+            # Очищаем данные для продолжения быстрого ввода
+            context.user_data.clear()
+            context.user_data['is_plan'] = is_plan
+            
+            fact_type_text = "📈 Доход" if fact_type == "доход" else "📉 Расход"
+            amount_text = format_number(amount)
+            plan_text = " (план)" if is_plan else ""
+            
+            if update.callback_query:
+                # Если описание пропущено по кнопке, редактируем сообщение
+                await update.callback_query.edit_message_text(
+                    f"✅ Данные{plan_text} записаны!\n"
+                    f"<b>{fact_type_text}</b>: {amount_text} руб. | {category}\n\n"
+                    "Введите следующую запись:\n"
+                    "<b>+/- сумма категория</b>\n\n"
+                    "Примеры: <code>+ 1000 продукты</code>, <code>-5000 транспорт</code>",
+                    parse_mode='HTML'
+                )
+            else:
+                # Если описание введено текстом, отправляем новое сообщение
+                await update.message.reply_text(
+                    f"✅ Данные{plan_text} записаны!\n"
+                    f"<b>{fact_type_text}</b>: {amount_text} руб. | {category}\n"
+                    f"{'Описание: ' + description if description else ''}\n\n"
+                    "Введите следующую запись:\n"
+                    "<b>+/- сумма категория</b>\n\n"
+                    "Примеры: <code>+ 1000 продукты</code>, <code>-5000 транспорт</code>",
+                    parse_mode='HTML'
+                )
+            
+            logger.info(f"Подтверждение отправлено пользователю {user_id}, ожидаем следующую запись")
+            
+            # Возвращаемся к соответствующему состоянию быстрого ввода
+            if is_plan:
+                return WAITING_FOR_PLAN_INPUT
+            else:
+                return WAITING_FOR_TEST_INPUT
+        else:
+            logger.error(f"Запись в таблицу не удалась для пользователя {user_id}")
+            error_msg = "❌ Ошибка при записи данных. Попробуйте еще раз."
+            if update.callback_query:
+                await update.callback_query.edit_message_text(error_msg)
+            else:
+                await update.message.reply_text(error_msg)
+            
+            # Возвращаемся к запросу описания
+            return WAITING_FOR_QUICK_DESCRIPTION
+    except Exception as e:
+        logger.error(f"Ошибка при записи в таблицу для пользователя {user_id}: {e}", exc_info=True)
+        error_msg = f"❌ Произошла ошибка при записи данных: {str(e)}\nПопробуйте еще раз."
+        try:
+            if update.callback_query:
+                await update.callback_query.edit_message_text(error_msg)
+            else:
+                await update.message.reply_text(error_msg)
+        except Exception as send_error:
+            logger.error(f"Не удалось отправить сообщение об ошибке пользователю {user_id}: {send_error}")
+        return WAITING_FOR_QUICK_DESCRIPTION
 
 
 async def start_input_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1190,7 +1255,7 @@ async def expense_income_callback(update: Update, context: ContextTypes.DEFAULT_
     is_plan = context.user_data.get('is_plan', False)
     logger.info(f"Установлен fact_type: {fact_type} для пользователя {user_id}, is_plan: {is_plan}")
     
-    # Проверяем, находимся ли мы в режиме /test
+    # Проверяем, находимся ли мы в режиме быстрого ввода
     test_mode = context.user_data.get('test_mode', False)
     logger.info(f"test_mode для пользователя {user_id}: {test_mode}")
     
@@ -1490,10 +1555,11 @@ async def continue_plan_callback(update: Update, context: ContextTypes.DEFAULT_T
         "📋 <b>Продолжаем ввод запланированных данных</b>\n\n"
         "Быстрый ввод:\n"
         "Введите данные через пробел:\n"
-        "<b>+/- сумма категория [описание]</b>\n\n"
+        "<b>+/- сумма категория</b>\n\n"
         "Примеры:\n"
-        "<code>+ 1000 продукты магазин</code> - запланированный доход\n"
-        "<code>- 5000 транспорт</code> - запланированный расход",
+        "<code>+ 1000 продукты</code> - запланированный доход\n"
+        "<code>- 5000 транспорт</code> - запланированный расход\n\n"
+        "После ввода появится возможность добавить описание.",
         parse_mode='HTML'
     )
     return WAITING_FOR_PLAN_INPUT
@@ -1513,6 +1579,44 @@ async def back_to_fact_callback(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=get_main_keyboard()
     )
     return WAITING_FOR_AMOUNT
+
+
+async def test_continue_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Продолжить ввод' после быстрого ввода"""
+    query = update.callback_query
+    await safe_answer_callback_query(query)
+    
+    context.user_data.clear()
+    context.user_data['is_plan'] = False
+    await query.edit_message_text(
+        "Продолжаем быстрый ввод данных.\n\n"
+        "Введите: <b>+/- сумма категория [описание]</b>\n"
+        "Примеры: <code>+ 1000 продукты</code>, <code>-5000 транспорт</code>",
+        parse_mode='HTML'
+    )
+    return WAITING_FOR_TEST_INPUT
+
+
+async def test_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'В начало' после быстрого ввода"""
+    query = update.callback_query
+    await safe_answer_callback_query(query)
+    
+    context.user_data.clear()
+    context.user_data['is_plan'] = False
+    
+    await query.edit_message_text(
+        "👋 <b>Возвращаемся в начало</b>\n\n"
+        "⚡ <b>Быстрый ввод данных</b>\n\n"
+        "Введите данные через пробел:\n"
+        "<b>+/- сумма категория [описание]</b>\n\n"
+        "Примеры:\n"
+        "<code>+ 1000 продукты магазин</code> - доход\n"
+        "<code>- 5000 транспорт</code> - расход\n"
+        "<code>+50000 зарплата</code> - доход",
+        parse_mode='HTML'
+    )
+    return WAITING_FOR_TEST_INPUT
 
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1584,7 +1688,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Основная функция запуска бота"""
-    global sheets_manager, sheet_url, application_instance
+    global sheets_manager, sheet_url, application_instance, pending_timezone
     
     # Загружаем переменные окружения
     load_env()
@@ -1618,18 +1722,21 @@ def main():
     
     # Получаем часовой пояс для job_queue
     tz = get_timezone()
+    if tz:
+        logger.info(f"Получен часовой пояс: {tz} (из TIMEZONE={os.getenv('TIMEZONE', 'Europe/Moscow')})")
+    else:
+        logger.warning("Часовой пояс не получен! Проверьте установку pytz или zoneinfo.")
     
     # Создаем приложение
     application = Application.builder().token(bot_token).build()
     
     # Настраиваем часовой пояс для job_queue (APScheduler)
-    if tz and hasattr(application.job_queue, '_scheduler'):
-        try:
-            application.job_queue._scheduler.timezone = tz
-            logger.info(f"Часовой пояс настроен для job_queue: {os.getenv('TIMEZONE', 'Europe/Moscow')}")
-        except Exception as e:
-            logger.warning(f"Не удалось настроить часовой пояс для job_queue: {e}")
-    elif not tz:
+    # Scheduler создается лениво, поэтому сохраняем часовой пояс в глобальной переменной
+    if tz:
+        pending_timezone = tz
+        logger.info(f"Часовой пояс сохранен для последующей установки: {tz}")
+    else:
+        pending_timezone = None
         logger.warning("Часовой пояс не установлен, напоминания будут работать в UTC!")
     
     application_instance = application  # Сохраняем для возможности перезапуска
@@ -1637,8 +1744,10 @@ def main():
     # Создаем ConversationHandler для основного потока ввода данных
     conv_handler = ConversationHandler(
         entry_points=[
+            CommandHandler("start", start_command),  # /start - быстрый ввод данных
+            CommandHandler("plan", plan_command),  # /plan - быстрый ввод плана
             CallbackQueryHandler(start_input_callback, pattern="^start_input$"),
-            CommandHandler("plan", plan_command)  # Команда /plan как точка входа
+            MessageHandler(filters.TEXT & ~filters.COMMAND, quick_input_entry_handler)  # Обработка быстрого ввода после напоминания
         ],
         states={
             WAITING_FOR_AMOUNT: [
@@ -1661,9 +1770,14 @@ def main():
                 CallbackQueryHandler(back_to_fact_callback, pattern="^back_to_fact$")
             ],
             WAITING_FOR_PLAN_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, plan_input_handler),
-                CallbackQueryHandler(continue_plan_callback, pattern="^continue_plan$"),
-                CallbackQueryHandler(back_to_fact_callback, pattern="^back_to_fact$")
+                MessageHandler(filters.TEXT & ~filters.COMMAND, plan_input_handler)
+            ],
+            WAITING_FOR_TEST_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, test_input_handler)
+            ],
+            WAITING_FOR_QUICK_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quick_description_handler),
+                CallbackQueryHandler(quick_description_handler, pattern="^skip_description$")
             ]
         },
         fallbacks=[
@@ -1673,61 +1787,8 @@ def main():
         ]
     )
     
-    # Обработчики для кнопок после ввода данных через /test
-    async def test_continue_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик кнопки 'Продолжить ввод' после /test"""
-        query = update.callback_query
-        await safe_answer_callback_query(query)
-        
-        context.user_data['test_mode'] = True
-        await query.edit_message_text(
-            "Продолжаем быстрый ввод данных.\n\n"
-            "Введите: <b>+/- сумма категория [описание]</b>\n"
-            "Примеры: <code>+ 1000 продукты</code>, <code>-5000 транспорт</code>",
-            parse_mode='HTML'
-        )
-        return WAITING_FOR_TEST_INPUT
-    
-    async def test_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик кнопки 'В начало' после /test"""
-        query = update.callback_query
-        await safe_answer_callback_query(query)
-        
-        context.user_data.clear()
-        keyboard = [[InlineKeyboardButton("СТАРТ", callback_data="start_input")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "Возвращаемся в начало.\n\n"
-            "Нажмите кнопку СТАРТ для начала работы.",
-            reply_markup=reply_markup
-        )
-        return ConversationHandler.END
-    
-    # Создаем ConversationHandler для команды /test
-    # Используем test_type_callback как альтернативный обработчик, но основной обработчик expense_income_callback
-    # будет проверять test_mode и переключаться в правильное состояние
-    test_conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("test", test_command)
-        ],
-        states={
-            WAITING_FOR_TEST_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, test_input_handler),
-                CallbackQueryHandler(test_continue_callback, pattern="^test_continue$"),
-                CallbackQueryHandler(test_start_callback, pattern="^test_start$")
-            ]
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel_conversation),
-            CommandHandler("restart", restart_command)  # Команда /restart работает в любом состоянии
-        ]
-    )
-    
     # Регистрируем обработчики
-    # Команды /start, /help, /report, /plan, /restart должны работать вне ConversationHandler
-    # Команда /plan теперь в entry_points ConversationHandler
-    application.add_handler(CommandHandler("start", start_command))
+    # Команды /start и /plan теперь в entry_points основного ConversationHandler
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("report", report_command))
     # application.add_handler(CommandHandler("plan", plan_command))  # Убрано - теперь в entry_points ConversationHandler
@@ -1758,8 +1819,7 @@ def main():
     application.add_handler(CallbackQueryHandler(reminders_callback, pattern="^(restart_reminders|test_morning|test_evening)$"))
     application.add_handler(CallbackQueryHandler(back_to_reminders_callback, pattern="^back_to_reminders$"))
     # ConversationHandler для команды /test (должен быть ПЕРЕД основным)
-    application.add_handler(test_conv_handler)
-    # ConversationHandler для основного потока ввода данных
+    # ConversationHandler для основного потока ввода данных (включая быстрый ввод)
     application.add_handler(conv_handler)
     
     # Добавляем обработчик ошибок
@@ -1794,9 +1854,15 @@ def main():
     job_queue = application.job_queue
     
     # Проверяем часовой пояс scheduler
-    if hasattr(job_queue, '_scheduler'):
+    # Часовой пояс уже сохранен в глобальной переменной pending_timezone при создании application
+    scheduler_tz = None
+    if hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
         scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
         logger.info(f"Часовой пояс scheduler: {scheduler_tz}")
+    elif pending_timezone:
+        logger.info(f"Часовой пояс сохранен для установки: {pending_timezone}")
+    else:
+        logger.warning("Часовой пояс не установлен, напоминания будут работать в UTC")
     
     # Получаем настройки времени
     morning_time_str = get_morning_time()
@@ -1804,6 +1870,16 @@ def main():
     logger.info(f"Настройки времени напоминаний: утро={morning_time_str}, вечер={evening_time_str}")
     
     try:
+        # Устанавливаем часовой пояс, если он был сохранен и scheduler теперь создан
+        if pending_timezone and hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
+            try:
+                job_queue._scheduler.timezone = pending_timezone
+                scheduler_tz = pending_timezone
+                logger.info(f"✅ Часовой пояс установлен для scheduler после создания: {scheduler_tz}")
+                pending_timezone = None  # Очищаем после установки
+            except Exception as e:
+                logger.warning(f"Не удалось установить сохраненный часовой пояс: {e}")
+        
         # Парсим время утреннего напоминания
         morning_hour, morning_minute = map(int, morning_time_str.split(':'))
         morning_time_obj = time(hour=morning_hour, minute=morning_minute)
@@ -1813,6 +1889,11 @@ def main():
             time=morning_time_obj,
             name="morning_reminder"
         )
+        
+        # Проверяем часовой пояс после создания первой задачи
+        if scheduler_tz is None and hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
+            scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
+        
         logger.info(f"✅ Настроено утреннее напоминание на {morning_time_str} (часовой пояс: {scheduler_tz if scheduler_tz else 'UTC'})")
         if hasattr(job, 'next_run_time'):
             logger.info(f"   Следующий запуск утреннего напоминания: {job.next_run_time}")
@@ -1840,7 +1921,7 @@ def main():
         )
         job_queue.run_daily(
             send_evening_reminder, 
-            time=time(hour=22, minute=20),
+            time=time(hour=21, minute=0),
             name="evening_reminder"
         )
         logger.info("Использованы настройки времени по умолчанию")

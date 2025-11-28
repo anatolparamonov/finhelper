@@ -199,15 +199,16 @@ class GoogleSheetsManager:
                 plan_value = ""
             
             # Подготавливаем массив данных для одной строки
+            # ВАЖНО: Порядок элементов соответствует столбцам A-H
             row_data = [
-                date_str,
-                time_str,
-                fact_value,
-                format_number(amount),
-                category,
-                description,
-                username,
-                plan_value
+                date_str,              # A - Дата
+                time_str,              # B - Время
+                fact_value,            # C - Факт (расход/доход или пусто для плана)
+                format_number(amount), # D - Сумма
+                category,              # E - Категория
+                description,           # F - Описание
+                username,              # G - Пользователь
+                plan_value             # H - План (расход/доход или пусто для факта)
             ]
             
             # Используем append_row для добавления строки (быстрее чем множественные update)
