@@ -246,11 +246,35 @@ async def restart_reminder_jobs(context: ContextTypes.DEFAULT_TYPE):
     """Перезапускает задачи напоминаний с текущими настройками времени"""
     job_queue = context.application.job_queue
     
-    # Проверяем часовой пояс scheduler
+    # Получаем часовой пояс из .env
+    tz = get_timezone()
     scheduler_tz = None
-    if hasattr(job_queue, '_scheduler'):
-        scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
-        logger.info(f"Часовой пояс scheduler при перезапуске: {scheduler_tz}")
+    
+    # Устанавливаем часовой пояс для scheduler, если он еще не установлен
+    if tz:
+        try:
+            # Инициализируем scheduler, если он еще не создан
+            if not hasattr(job_queue, '_scheduler') or job_queue._scheduler is None:
+                _ = job_queue.jobs()  # Это инициализирует scheduler
+                
+            # Устанавливаем таймзону
+            if hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
+                job_queue._scheduler.timezone = tz
+                scheduler_tz = tz
+                logger.info(f"✅ Часовой пояс установлен для scheduler при перезапуске: {scheduler_tz}")
+            else:
+                # Проверяем текущий часовой пояс
+                if hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
+                    scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
+                    if scheduler_tz:
+                        logger.info(f"Часовой пояс scheduler при перезапуске: {scheduler_tz}")
+                    else:
+                        logger.warning("Scheduler не имеет установленного часового пояса (используется UTC)")
+        except Exception as e:
+            logger.error(f"Ошибка установки часового пояса при перезапуске: {e}", exc_info=True)
+            # Проверяем текущий часовой пояс
+            if hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
+                scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
     
     # Удаляем старые задачи
     current_jobs = job_queue.jobs()
@@ -296,7 +320,7 @@ async def restart_reminder_jobs(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"   Следующий запуск вечернего: {evening_job.next_run_time}")
         
     except Exception as e:
-        logger.error(f"Ошибка при перезапуске напоминаний: {e}")
+        logger.error(f"Ошибка при перезапуске напоминаний: {e}", exc_info=True)
 
 
 def parse_time_string(time_str: str) -> tuple:
@@ -524,10 +548,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Команда /start от пользователя {user_id}")
     
+    # Полностью очищаем состояние пользователя
     context.user_data.clear()
     context.user_data['is_plan'] = False
     
-    logger.info(f"Быстрый ввод активирован для пользователя {user_id}")
+    # Убираем все флаги, которые могут вызвать проблемы
+    if '_ready_for_quick_input' in context.user_data:
+        del context.user_data['_ready_for_quick_input']
+    
+    logger.info(f"Быстрый ввод активирован для пользователя {user_id}, состояние очищено")
     
     await update.message.reply_text(
         "👋 <b>Добро пожаловать в FinHelper!</b>\n\n"
@@ -743,13 +772,16 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📋 <b>Режим планирования</b>\n\n"
         "Быстрый ввод запланированных данных.\n\n"
-        "Введите данные через пробел:\n"
-        "<b>+/- сумма категория</b>\n\n"
+        "Введите данные через пробел (можно несколько строк сразу):\n"
+        "<b>+/- сумма категория [описание]</b>\n\n"
         "Примеры:\n"
         "<code>+ 1000 продукты</code> - запланированный доход\n"
         "<code>- 5000 транспорт</code> - запланированный расход\n"
-        "<code>+50000 зарплата</code> - запланированный доход (без пробела между знаком и суммой тоже можно)\n\n"
-        "После ввода появится возможность добавить описание.",
+        "<code>+50000 зарплата</code> - запланированный доход (без пробела между знаком и суммой тоже можно)\n"
+        "<code>+ 1000 продукты магазин</code> - с описанием\n\n"
+        "💡 <i>Можно ввести несколько записей сразу, каждая на новой строке</i>\n"
+        "Пример:\n"
+        "<code>+ 1000 продукты магазин\n- 5000 транспорт такси\n+ 20000 зарплата</code>",
         parse_mode='HTML'
     )
     logger.info(f"Отправлено сообщение с инструкциями для пользователя {user_id}")
@@ -963,8 +995,74 @@ async def test_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return WAITING_FOR_TEST_INPUT
 
 
+def parse_plan_line(line: str):
+    """Парсит одну строку плана и возвращает (fact_type, amount, category, description) или None при ошибке"""
+    line = line.strip()
+    if not line:
+        return None, None, None, None, "Пустая строка"
+    
+    parts = line.split()
+    if len(parts) < 2:
+        return None, None, None, None, "Неверный формат: недостаточно данных"
+    
+    # Парсим тип операции и сумму
+    symbol = None
+    amount_text = None
+    category_index = None
+    
+    first_token = parts[0]
+    if first_token in ("+", "-"):
+        symbol = first_token
+        if len(parts) < 3:
+            return None, None, None, None, "Неверный формат: после знака укажите сумму и категорию"
+        amount_text = parts[1]
+        category_index = 2
+    else:
+        # Возможно, знак и сумма в одном токене (+1000)
+        if first_token.startswith("+") or first_token.startswith("-"):
+            symbol = first_token[0]
+            amount_text = first_token[1:]
+            category_index = 1
+            if not amount_text:
+                return None, None, None, None, "После знака необходимо указать число"
+        else:
+            return None, None, None, None, "Первый символ должен быть + (доход) или - (расход)"
+    
+    fact_type = "доход" if symbol == "+" else "расход"
+    
+    # Парсим сумму
+    try:
+        amount = parse_number(amount_text)
+        if amount <= 0:
+            return None, None, None, None, "Сумма должна быть положительной"
+    except (ValueError, IndexError) as e:
+        return None, None, None, None, f"Неверный формат суммы: {str(e)}"
+    
+    # Ищем категорию
+    if len(parts) <= category_index:
+        return None, None, None, None, "Укажите категорию после суммы"
+    
+    category_word = parts[category_index]
+    category_type = "Расходы" if fact_type == "расход" else "Доходы"
+    categories = sheets_manager.get_categories(category_type)
+    
+    if not categories:
+        return None, None, None, None, f"Категории для {category_type.lower()} не найдены в таблице"
+    
+    category = find_closest_category(category_word, categories)
+    if not category:
+        return None, None, None, None, f"Категория '{category_word}' не найдена"
+    
+    # Извлекаем описание (все что после категории)
+    description = ""
+    if len(parts) > category_index + 1:
+        description = " ".join(parts[category_index + 1:])
+    
+    return fact_type, amount, category, description, None
+
+
 async def plan_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик быстрого ввода данных для /plan"""
+    """Обработчик быстрого ввода данных для /plan с поддержкой многострочного ввода"""
     user_id = update.effective_user.id
     logger.info(f"plan_input_handler вызван для пользователя {user_id}")
     
@@ -982,142 +1080,152 @@ async def plan_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         text = update.message.text.strip()
         logger.info(f"Получен текст от пользователя {user_id}: '{text}'")
-        parts = text.split()
-        logger.info(f"Разделено на части: {parts}")
         
-        if len(parts) < 2:
+        # Разделяем на строки
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        logger.info(f"Разделено на строки: {len(lines)} строк")
+        
+        if not lines:
             await update.message.reply_text(
-                "Неверный формат. Введите: <b>+/- сумма категория [описание]</b>\n\n"
-                "Примеры:\n"
-                "<code>+ 1000 продукты магазин</code> - запланированный доход\n"
-                "<code>- 5000 транспорт</code> - запланированный расход",
+                "Введите данные в формате: <b>+/- сумма категория</b>\n\n"
+                "Можно ввести несколько строк сразу, каждая на новой строке.",
                 parse_mode='HTML'
             )
             return WAITING_FOR_PLAN_INPUT
         
-        # Парсим тип операции и сумму
-        symbol = None
-        amount_text = None
-        category_index = None
-        
-        first_token = parts[0]
-        if first_token in ("+", "-"):
-            symbol = first_token
-            if len(parts) < 3:
+        # Если только одна строка, обрабатываем как раньше (с запросом описания, если его нет)
+        if len(lines) == 1:
+            fact_type, amount, category, description, error = parse_plan_line(lines[0])
+            
+            if error:
                 await update.message.reply_text(
-                    "Неверный формат. После знака укажите сумму и категорию.\n\n"
+                    f"❌ {error}\n\n"
+                    "Формат: <b>+/- сумма категория [описание]</b>\n"
                     "Пример: <code>+ 1000 продукты</code>",
                     parse_mode='HTML'
                 )
                 return WAITING_FOR_PLAN_INPUT
-            amount_text = parts[1]
-            category_index = 2
-        else:
-            # Возможно, знак и сумма в одном токене (+1000)
-            if first_token.startswith("+") or first_token.startswith("-"):
-                symbol = first_token[0]
-                amount_text = first_token[1:]
-                category_index = 1
-                if not amount_text:
+            
+            # Если описание уже есть в строке, сохраняем сразу
+            if description:
+                username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
+                try:
+                    success = sheets_manager.add_record(
+                        fact_type=fact_type,
+                        amount=amount,
+                        category=category,
+                        description=description,
+                        username=username,
+                        is_plan=True
+                    )
+                    
+                    if success:
+                        await update.message.reply_text(
+                            f"✅ Данные (план) записаны!\n"
+                            f"<b>{fact_type}</b>: {format_number(amount)} руб. | {category}\n"
+                            f"Описание: {description}\n\n"
+                            "Введите следующую запись:\n"
+                            "<b>+/- сумма категория [описание]</b>",
+                            parse_mode='HTML'
+                        )
+                        return WAITING_FOR_PLAN_INPUT
+                    else:
+                        await update.message.reply_text(
+                            "❌ Ошибка при записи данных. Попробуйте еще раз.",
+                            parse_mode='HTML'
+                        )
+                        return WAITING_FOR_PLAN_INPUT
+                except Exception as e:
+                    logger.error(f"Ошибка при записи для пользователя {user_id}: {e}", exc_info=True)
                     await update.message.reply_text(
-                        "После знака необходимо указать число.\n\n"
-                        "Пример: <code>+1000 продукты</code>",
+                        f"❌ Произошла ошибка: {str(e)}",
                         parse_mode='HTML'
                     )
                     return WAITING_FOR_PLAN_INPUT
-            else:
-                await update.message.reply_text(
-                    "Первый символ должен быть <b>+</b> (доход) или <b>-</b> (расход).\n\n"
-                    "Пример: <code>+ 1000 продукты</code> или <code>-5000 транспорт</code>",
-                    parse_mode='HTML'
-                )
-                return WAITING_FOR_PLAN_INPUT
-        
-        fact_type = "доход" if symbol == "+" else "расход"
-        logger.info(f"Определен тип операции: {fact_type} (символ: {symbol})")
-        context.user_data['fact_type'] = fact_type
-        
-        # Парсим сумму
-        try:
-            logger.info(f"Парсинг суммы из '{amount_text}'")
-            amount = parse_number(amount_text)
-            logger.info(f"Распарсенная сумма: {amount}")
-            if amount <= 0:
-                raise ValueError("Сумма должна быть положительной")
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка парсинга суммы для пользователя {user_id}: {e}")
+            
+            # Если описания нет, запрашиваем его
+            context.user_data['fact_type'] = fact_type
+            context.user_data['amount'] = amount
+            context.user_data['category'] = category
+            
             await update.message.reply_text(
-                "Неверный формат суммы. Введите число в целых рублях.\n"
-                "Пример: <code>+ 1000</code> или <code>-10 000</code>",
-                parse_mode='HTML'
+                f"✅ Принято (план):\n"
+                f"<b>{fact_type}</b>: {format_number(amount)} руб. | {category}\n\n"
+                "Введите описание или нажмите кнопку для пропуска:",
+                parse_mode='HTML',
+                reply_markup=get_skip_description_keyboard()
             )
-            return WAITING_FOR_PLAN_INPUT
+            return WAITING_FOR_QUICK_DESCRIPTION
         
-        # Ищем категорию по следующему слову
-        try:
-            if len(parts) <= category_index:
-                await update.message.reply_text(
-                    "Укажите категорию после суммы.\n\n"
-                    "Пример: <code>+ 1000 продукты</code>",
-                    parse_mode='HTML'
-                )
-                return WAITING_FOR_PLAN_INPUT
-            
-            category_word = parts[category_index]
-            logger.info(f"Поиск категории по слову '{category_word}'")
-            category_type = "Расходы" if fact_type == "расход" else "Доходы"
-            logger.info(f"Тип операции: {fact_type}, тип категории: {category_type}")
-            categories = sheets_manager.get_categories(category_type)
-            logger.info(f"Получено категорий: {len(categories)} - {categories[:5]}")
-            
-            if not categories:
-                await update.message.reply_text(
-                    f"Категории для {category_type.lower()} не найдены в таблице."
-                )
-                return WAITING_FOR_PLAN_INPUT
-            
-            category = find_closest_category(category_word, categories)
-            logger.info(f"Найденная категория для '{category_word}': {category}")
-            
-            if not category:
-                logger.warning(f"Категория '{category_word}' не найдена для пользователя {user_id}. Доступные: {categories}")
-                category_list = ', '.join(categories[:10]) if len(categories) > 10 else ', '.join(categories)
-                await update.message.reply_text(
-                    f"❌ Категория '<b>{category_word}</b>' не найдена.\n\n"
-                    f"Доступные категории:\n{category_list}\n\n"
-                    f"Попробуйте ввести еще раз с правильной категорией.",
-                    parse_mode='HTML'
-                )
-                logger.info(f"Отправлено сообщение об ошибке пользователю {user_id}")
-                return WAITING_FOR_PLAN_INPUT
-        except Exception as e:
-            logger.error(f"Ошибка при поиске категории для пользователя {user_id}: {e}", exc_info=True)
-            await update.message.reply_text(
-                "Ошибка при поиске категории. Попробуйте еще раз."
-            )
-            return WAITING_FOR_PLAN_INPUT
+        # Многострочный ввод - обрабатываем все строки сразу с описаниями
+        username = update.effective_user.username or update.effective_user.first_name or "Неизвестный"
+        successful = []
+        failed = []
         
-        # Сохраняем данные (без описания - оно будет запрошено отдельно)
-        context.user_data['amount'] = amount
-        context.user_data['category'] = category
+        for line_num, line in enumerate(lines, 1):
+            fact_type, amount, category, description, error = parse_plan_line(line)
+            
+            if error:
+                failed.append(f"Строка {line_num}: {error}")
+                logger.warning(f"Ошибка парсинга строки {line_num} для пользователя {user_id}: {error}")
+                continue
+            
+            # Сохраняем запись с описанием (если оно есть)
+            try:
+                success = sheets_manager.add_record(
+                    fact_type=fact_type,
+                    amount=amount,
+                    category=category,
+                    description=description if description else "",
+                    username=username,
+                    is_plan=True
+                )
+                
+                if success:
+                    desc_text = f" | {description}" if description else ""
+                    successful.append(f"{line_num}. {fact_type}: {format_number(amount)} руб. | {category}{desc_text}")
+                    logger.info(f"Запись {line_num} успешно сохранена для пользователя {user_id}")
+                else:
+                    failed.append(f"Строка {line_num}: ошибка записи в таблицу")
+            except Exception as e:
+                logger.error(f"Ошибка при записи строки {line_num} для пользователя {user_id}: {e}", exc_info=True)
+                failed.append(f"Строка {line_num}: {str(e)}")
         
-        # Переходим к запросу описания
+        # Формируем ответ
+        result_text = "📋 <b>Результат обработки плана:</b>\n\n"
+        
+        if successful:
+            result_text += f"✅ <b>Успешно обработано ({len(successful)}):</b>\n"
+            for item in successful:
+                result_text += f"  {item}\n"
+            result_text += "\n"
+        
+        if failed:
+            result_text += f"❌ <b>Ошибки ({len(failed)}):</b>\n"
+            for item in failed:
+                result_text += f"  {item}\n"
+            result_text += "\n"
+        
+        if successful:
+            result_text += "Введите следующую запись или несколько строк:\n"
+            result_text += "<b>+/- сумма категория</b>"
+        else:
+            result_text += "Попробуйте ввести данные еще раз."
+        
         await update.message.reply_text(
-            f"✅ Принято (план):\n"
-            f"<b>{fact_type}</b>: {format_number(amount)} руб. | {category}\n\n"
-            "Введите описание или нажмите кнопку для пропуска:",
-            parse_mode='HTML',
-            reply_markup=get_skip_description_keyboard()
+            result_text,
+            parse_mode='HTML'
         )
-        logger.info(f"Запрос описания для плана пользователя {user_id}")
-        return WAITING_FOR_QUICK_DESCRIPTION
+        
+        return WAITING_FOR_PLAN_INPUT
         
     except Exception as e:
         logger.error(f"Критическая ошибка в plan_input_handler для пользователя {user_id}: {e}", exc_info=True)
         try:
             await update.message.reply_text(
                 "❌ Произошла ошибка. Попробуйте еще раз.\n"
-                "Формат: <b>+/- сумма категория [описание]</b>",
+                "Формат: <b>+/- сумма категория</b>\n"
+                "Можно ввести несколько строк сразу.",
                 parse_mode='HTML'
             )
         except Exception as send_error:
@@ -1782,6 +1890,7 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel_conversation),
+            CommandHandler("start", start_command),  # Команда /start работает в любом состоянии - возврат в начало
             CommandHandler("plan", plan_command),  # Команда /plan работает в любом состоянии
             CommandHandler("restart", restart_command)  # Команда /restart работает в любом состоянии
         ]
@@ -1853,33 +1962,46 @@ def main():
     # Настраиваем ежедневные напоминания
     job_queue = application.job_queue
     
-    # Проверяем часовой пояс scheduler
-    # Часовой пояс уже сохранен в глобальной переменной pending_timezone при создании application
-    scheduler_tz = None
-    if hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
-        scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
-        logger.info(f"Часовой пояс scheduler: {scheduler_tz}")
-    elif pending_timezone:
-        logger.info(f"Часовой пояс сохранен для установки: {pending_timezone}")
-    else:
-        logger.warning("Часовой пояс не установлен, напоминания будут работать в UTC")
-    
     # Получаем настройки времени
     morning_time_str = get_morning_time()
     evening_time_str = get_evening_time()
     logger.info(f"Настройки времени напоминаний: утро={morning_time_str}, вечер={evening_time_str}")
     
-    try:
-        # Устанавливаем часовой пояс, если он был сохранен и scheduler теперь создан
-        if pending_timezone and hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
-            try:
+    # Устанавливаем часовой пояс для scheduler
+    scheduler_tz = None
+    if pending_timezone:
+        # Пытаемся установить таймзону для scheduler
+        # Scheduler создается лениво, поэтому нужно инициализировать его явно
+        try:
+            # Инициализируем scheduler, если он еще не создан
+            if not hasattr(job_queue, '_scheduler') or job_queue._scheduler is None:
+                # Создаем scheduler явно через создание первой задачи или доступ к job_queue
+                _ = job_queue.jobs()  # Это инициализирует scheduler
+                
+            # Устанавливаем таймзону
+            if hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
                 job_queue._scheduler.timezone = pending_timezone
                 scheduler_tz = pending_timezone
-                logger.info(f"✅ Часовой пояс установлен для scheduler после создания: {scheduler_tz}")
+                logger.info(f"✅ Часовой пояс установлен для scheduler: {scheduler_tz}")
                 pending_timezone = None  # Очищаем после установки
-            except Exception as e:
-                logger.warning(f"Не удалось установить сохраненный часовой пояс: {e}")
-        
+            else:
+                logger.warning("Не удалось получить доступ к scheduler для установки таймзоны")
+        except Exception as e:
+            logger.error(f"Ошибка установки часового пояса для scheduler: {e}", exc_info=True)
+            logger.warning("Напоминания будут работать в UTC!")
+    else:
+        logger.warning("Часовой пояс не установлен, напоминания будут работать в UTC")
+    
+    # Проверяем текущий часовой пояс scheduler
+    if hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
+        current_tz = getattr(job_queue._scheduler, 'timezone', None)
+        if current_tz:
+            scheduler_tz = current_tz
+            logger.info(f"Текущий часовой пояс scheduler: {scheduler_tz}")
+        else:
+            logger.warning("Scheduler не имеет установленного часового пояса (используется UTC)")
+    
+    try:
         # Парсим время утреннего напоминания
         morning_hour, morning_minute = map(int, morning_time_str.split(':'))
         morning_time_obj = time(hour=morning_hour, minute=morning_minute)
@@ -1889,10 +2011,6 @@ def main():
             time=morning_time_obj,
             name="morning_reminder"
         )
-        
-        # Проверяем часовой пояс после создания первой задачи
-        if scheduler_tz is None and hasattr(job_queue, '_scheduler') and job_queue._scheduler is not None:
-            scheduler_tz = getattr(job_queue._scheduler, 'timezone', None)
         
         logger.info(f"✅ Настроено утреннее напоминание на {morning_time_str} (часовой пояс: {scheduler_tz if scheduler_tz else 'UTC'})")
         if hasattr(job, 'next_run_time'):
